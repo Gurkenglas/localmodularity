@@ -42,17 +42,16 @@ def duplicate(ins):
 def condmutinf(f, shape):
     "Calculate the conditional mutual information between the two groups conditional on the input plus noise"
 
-    #entr_b(a) = b(log(b/a)) = b(log(b/c)) - b(log(a/c))
-
-    #the average of a distribution p is the point relative to which the expected squared distance is minimal
-    #the median of a distribution p is the point relative to which the expected distance is minimal
-    #the distribution q of a distribution p is the point relative to which the p-expected log(p/q) is minimal
+    # A differentiable function is locally linear, so we pretend that that we're analyzing a linear function. We average over multiple points.
+    # How *do* we analyze a linear function? We watch how it transforms measures on the input.
+    # Every space is assumed to come equipped with a reference measure. We fix it to the Lebesgue measure L for the input space and then use the pushforward measures for the other spaces.
+    # On the level of data and not spaces, we also work with the distribution Omega that the training data was sampled from.
+    # Pushing Omega (and L) through the linear function produces an activation distribution. Its entropy (relative to its reference measure) is the same as that of Omega, so long as the function is injective.
+    # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
 
     jacs = []
-    color_graph = None
-    examplemask = torch.randint(0,2,(1300,))
     for i in tqdm(range(1)):
-        jacs.append(torch.autograd.functional.jacobian(lambda x: torch.stack(networkgraph.make_dot(examplemask, f(x), show_saved=True)[0]), torch.rand(*shape)).reshape(-1, prod(shape)))
+        jacs.append(torch.autograd.functional.jacobian(lambda x: torch.stack(networkgraph.make_dot(f(x), show_saved=True)[0]), torch.rand(*shape)).reshape(-1, prod(shape)))
     jac = torch.stack(jacs)
     print("jac.shape[1]: " , jac.shape[1])
 
@@ -63,7 +62,6 @@ def condmutinf(f, shape):
         count += 1
         return t
     
-    cov = jac @ jac.transpose(1,2)
     mutinfs = []
     @functools.cache
     def entr(m): 
@@ -93,8 +91,6 @@ def condmutinf(f, shape):
     plt.show()
 
     leaflist = dn["leaves"]
-    colorlist = dn["leaves_color_list"]
-    oranges_colorlist = [mpl.colors.to_hex(colorlist[leaflist.index(i)]) for i in range(len(leaflist))]
 
     mutinfs = [[*t[leaflist],m] for t,m in mutinfs]
     cov = cov[:,leaflist,:][:,:,leaflist] #convert to csv using ([^\n\-0-9\.,]|(?<!\],)\n|(?<=\]),)
@@ -103,9 +99,9 @@ def condmutinf(f, shape):
         writer = csv.writer(file)
         writer.writerows(mutinfs)
     
-
+    colorlist = (mpl.colors.to_hex(dn["leaves_color_list"][leaflist.index(i)]) for i in range(jac.shape[1]))
     exampleinput = torch.rand(*shape, requires_grad=True)
-    networkgraph.make_dot(oranges_colorlist, f(exampleinput), show_saved=True)[1].render('graph_from_dendrogram', format='jpg')
+    networkgraph.make_dot(f(exampleinput), show_saved=True, mask = colorlist)[1].render('graph_from_dendrogram', format='jpg')
     
     #assemble graphs into a video
     #import os
