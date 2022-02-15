@@ -56,7 +56,7 @@ def condmutinf(f, shape):
     print("jac.shape[1]: " , jac.shape[1])
 
     count = 0   
-    def cluster(t):
+    def cluster_(t):
         nonlocal count
         t.index = count
         count += 1
@@ -72,14 +72,15 @@ def condmutinf(f, shape):
         a,b  = sorted(list(s), key = lambda t: t.index)
         return (entr(a) + entr(b))/entr(a+b)
 
-    clusters = set([cluster(t) for t in torch.eye(jac.shape[1]).unbind()])
+    leaves = torch.eye(jac.shape[1]).unbind()
+    clusters = set([cluster_(t) for t in leaves])
     linkage = []        
     while len(clusters)>1:
         s = max(itertools.combinations(clusters, 2), key=mutinf)
         a,b = s
         clusters.remove(a)
         clusters.remove(b)
-        c = cluster(a+b)
+        c = cluster_(a+b)
         clusters.add(c)
 
         linkage.append([a.index, b.index, entr(c), c.count_nonzero().item()])
@@ -87,10 +88,13 @@ def condmutinf(f, shape):
 
     plt.figure()    
     dn = hierarchy.dendrogram(linkage)
+    leaflist = dn["leaves"]
+    #Sort the leaves by their index
+    for i,l in enumerate(leaflist):
+        plt.plot(i, entr(leaves[l]), "o")
     plt.savefig("dendrogram.jpg")
     plt.show()
 
-    leaflist = dn["leaves"]
 
     mutinfs = [[*t[leaflist],m] for t,m in mutinfs]
     cov = cov[:,leaflist,:][:,:,leaflist] #convert to csv using ([^\n\-0-9\.,]|(?<!\],)\n|(?<=\]),)
