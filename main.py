@@ -91,13 +91,14 @@ def condmutinf(f, shape):
     leaflist = dn["leaves"]
     #Sort the leaves by their index
     for i,l in enumerate(leaflist):
-        plt.plot(i, entr(leaves[l]), "o")
+        plt.plot(10*(i+0.5), entr(leaves[l]), "o")
     plt.savefig("dendrogram.jpg")
     plt.show()
 
 
     mutinfs = [[*t[leaflist],m] for t,m in mutinfs]
-    cov = cov[:,leaflist,:][:,:,leaflist] #convert to csv using ([^\n\-0-9\.,]|(?<!\],)\n|(?<=\]),)
+    jac = jac[:,leaflist,:]
+    cov = jac @ jac.transpose(1,2) #convert to csv using ([^\n\-0-9\.,]|(?<!\],)\n|(?<=\]),)
     import csv
     with open("mutinf.csv", "w", newline ='') as file:
         writer = csv.writer(file)
