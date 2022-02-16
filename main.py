@@ -9,10 +9,6 @@ import networkgraph
 import numpy as np
 from tqdm import tqdm
 from scipy.cluster import hierarchy
-
-#Set torch to double precision
-torch.set_default_dtype(torch.double)
-
 #torch.Tensor.repr = lambda self: self.shape.repr()
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
 
@@ -31,13 +27,6 @@ def adder(ins):
         activations.append([a,b,u,v,w,x, carry])
     sum.append(carry)
     return torch.stack(sum)
-
-
-def duplicate(ins):
-    return torch.stack([ins, ins])
-
-
-
 
 def condmutinf(f, shape):
     "Calculate the conditional mutual information between the two groups conditional on the input plus noise"
