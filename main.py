@@ -2,10 +2,13 @@ import functools
 import itertools
 from math import prod
 import torch
+torch.set_printoptions(precision=3, sci_mode=False)
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import torchviz
 import networkgraph
+import torchexample
+import torchinfo
 import numpy as np
 from tqdm import tqdm
 from scipy.cluster import hierarchy
@@ -42,7 +45,7 @@ def condmutinf(f, shape):
     for i in tqdm(range(1)):
         jacs.append(torch.autograd.functional.jacobian(lambda x: torch.stack(networkgraph.make_dot(f(x), show_saved=True)[0]), torch.rand(*shape)).reshape(-1, prod(shape)))
     jac = torch.stack(jacs)
-    print("jac.shape[1]: " , jac.shape[1])
+    print("jac.shape[1]: " , jac.shape[1], "  jac.shape: ", jac.shape)
 
     count = 0   
     def cluster_(t):
@@ -57,9 +60,26 @@ def condmutinf(f, shape):
         sings = torch.linalg.svd(jac[:,m>=1,:])[1].log()
         return (sings[:,sings[0]>-10] + (1+np.log(2*np.pi))).sum(1).mean()
 
+    torch_precision = np.log(2**(-64))  #approximation of minimal variance of a dimension of activation space
+    
+    
+    @functools.cache
+    def slightly_different_entropy(m):	
+        sings = torch.linalg.svd(jac[:,m>=1,:])[1].log()[:, :jac.shape[2]]
+
+        #if(torch.flatten(sings[:, jac.shape[2]:]).max() > -60):
+            #print("interesting case: mask:", m, " , sings: ", sings)
+
+        sings[sings < torch_precision] = torch_precision
+        return (sings - torch_precision).sum(1).mean()
+
+
+
+        
+
     def mutinf(s):
         a,b  = sorted(list(s), key = lambda t: t.index)
-        return (entr(a) + entr(b))/entr(a+b)
+        return (slightly_different_entropy(a) + slightly_different_entropy(b))/slightly_different_entropy(a+b)
 
     leaves = torch.eye(jac.shape[1]).unbind()
     clusters = set([cluster_(t) for t in leaves])
@@ -72,7 +92,7 @@ def condmutinf(f, shape):
         c = cluster_(a+b)
         clusters.add(c)
 
-        linkage.append([a.index, b.index, entr(c), c.count_nonzero().item()])
+        linkage.append([a.index, b.index, slightly_different_entropy(c), c.count_nonzero().item()])
         mutinfs.append([((a-b).numpy()), mutinf(s).item()]) 
 
     plt.figure()    
@@ -80,7 +100,7 @@ def condmutinf(f, shape):
     leaflist = dn["leaves"]
     #Sort the leaves by their index
     for i,l in enumerate(leaflist):
-        plt.plot(10*(i+0.5), entr(leaves[l]), "o")
+        plt.plot(10*(i+0.5), slightly_different_entropy(leaves[l]), "o")
     plt.savefig("dendrogram.jpg")
     plt.show()
 
@@ -102,3 +122,6 @@ def condmutinf(f, shape):
     #os.system('ffmpeg -r 10 -i graph_%d.jpg -vcodec mpeg4 -y graph.mp4')
     #os.system('rm graph_*.jpg')
 condmutinf(adder, (2,2))
+
+#model = torchexample.train_network()
+#torchinfo.summary(model)
