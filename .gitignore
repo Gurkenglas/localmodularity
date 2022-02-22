@@ -4,3 +4,5 @@ graph_from_dendrogram
 graph_from_dendrogram.jpg
 mutinf.csv
 __pycache__/
+saved figures/
+data/
