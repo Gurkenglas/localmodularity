@@ -13,10 +13,6 @@ import torchinfo
 import numpy as np
 from tqdm import tqdm
 from scipy.cluster import hierarchy
-
-#Set torch to double precision
-torch.set_default_dtype(torch.double)
-
 #torch.Tensor.repr = lambda self: self.shape.repr()
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
 
