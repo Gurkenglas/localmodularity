@@ -1,6 +1,7 @@
 import functools
 import itertools
 from math import prod
+import os
 import torch
 torch.set_printoptions(precision=3, sci_mode=False)
 import matplotlib.pyplot as plt
@@ -35,13 +36,6 @@ def adder(ins):
     sum.append(carry)
     return torch.stack(sum)
 
-
-def duplicate(ins):
-    return torch.stack([ins, ins])
-
-
-
-
 def condmutinf(f, shape):
     "Calculate the conditional mutual information between the two groups conditional on the input plus noise"
 
@@ -52,10 +46,8 @@ def condmutinf(f, shape):
     # Pushing Omega (and L) through the linear function produces an activation distribution. Its entropy (relative to its reference measure) is the same as that of Omega, so long as the function is injective.
     # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
 
-    jacs = []
-    for i in tqdm(range(1)):
-        jacs.append(torch.autograd.functional.jacobian(lambda x: torch.stack(networkgraph.make_dot(f(x), show_saved=True)[0]), torch.rand(*shape)).reshape(-1, prod(shape)))
-    jac = torch.stack(jacs)
+    
+    jac = torch.autograd.functional.jacobian(lambda x: [f(t) for t in torch.unbind(x)].sum(0), torch.rand(*shape)).transpose(0,1)
     print("jac.shape[1]: " , jac.shape[1], "  jac.shape: ", jac.shape)
 
     count = 0   
@@ -71,8 +63,7 @@ def condmutinf(f, shape):
         sings = torch.linalg.svd(jac[:,m>=1,:])[1].log()
         return (sings[:,sings[0]>-10] + (1+np.log(2*np.pi))).sum(1).mean()
 
-    torch_precision = np.log(2**(-64))  #approximation of minimal variance of a dimension of activation space
-    
+    torch_precision = np.log(2**(-55))  #approximation of minimal variance of a dimension of activation space
     
     @functools.cache
     def slightly_different_entropy(m):	
@@ -83,10 +74,6 @@ def condmutinf(f, shape):
 
         sings[sings < torch_precision] = torch_precision
         return (sings - torch_precision).sum(1).mean()
-
-
-
-        
 
     def mutinf(s):
         a,b  = sorted(list(s), key = lambda t: t.index)
@@ -132,7 +119,29 @@ def condmutinf(f, shape):
     #import os
     #os.system('ffmpeg -r 10 -i graph_%d.jpg -vcodec mpeg4 -y graph.mp4')
     #os.system('rm graph_*.jpg')
-condmutinf(adder, (2,2))
+#condmutinf(adder, (2,2))
 
-#model = torchexample.train_network()
-#torchinfo.summary(model)
+#train a model unless there is one at "model.pt" already
+if not os.path.isfile("model.pt"):
+    model = torchexample.train_network()
+    torchinfo.summary(model)
+    torch.save(model.state_dict(), "model.pt")
+
+#load the model
+model = torchexample.NeuralNetwork()
+model.load_state_dict(torch.load("model.pt"))
+
+#define a function that wraps a model and given an input returns not the output but a tensor of all numbers computed within the model
+def forward_all(model, input):
+    all_tensors = (input.reshape(-1),)
+    def hook(model, input, output):
+        nonlocal all_tensors
+        all_tensors += (output,)
+    for layer in model.children():
+        layer.register_forward_hook(hook)
+    model(input)
+    for layer in model.children():
+        layer.register_forward_hook(None)
+    return all_tensors
+
+condmutinf(lambda i: forward_all(model, i), (1, 28*28))

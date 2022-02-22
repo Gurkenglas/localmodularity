@@ -6,3 +6,6 @@ mutinf.csv
 __pycache__/
 saved figures/
 data/
+Mnist_graph
+Mnist_graph.jpg
+model.pt

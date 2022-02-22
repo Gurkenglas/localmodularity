@@ -120,7 +120,7 @@ def make_dot(var, params=None, show_attrs=False, show_saved=False, max_attr_char
                 if torch.is_tensor(val):
                     dot.edge(str(id(fn)), str(id(val)), dir="none")
                     dot.node(str(id(val)), str(orangecounter), fillcolor=color())
-                    oranges.append(val)
+                    oranges.append(val.reshape(-1))
                     orangecounter += 1
                 if isinstance(val, tuple):
                     for i, t in enumerate(val):
@@ -128,7 +128,7 @@ def make_dot(var, params=None, show_attrs=False, show_saved=False, max_attr_char
                             name = attr + '[%s]' % str(i)
                             dot.edge(str(id(fn)), str(id(t)), dir="none")
                             dot.node(str(id(t)), str(orangecounter), fillcolor=color())
-                            oranges.append(t)
+                            oranges.append(t.reshape(-1))
                             orangecounter += 1
 
         if hasattr(fn, 'variable'):
