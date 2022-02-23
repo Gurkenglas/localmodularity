@@ -42,8 +42,10 @@ def condmutinf(f, shape):
     # Pushing Omega (and L) through the linear function produces an activation distribution. Its entropy (relative to its reference measure) is the same as that of Omega, so long as the function is injective.
     # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
 
-    
-    jac = torch.autograd.functional.jacobian(lambda x: [f(t) for t in torch.unbind(x)].sum(0), torch.rand(*shape)).transpose(0,1)
+    def sum_all_columns(tuple):
+
+    jacs = torch.autograd.functional.jacobian(lambda x: sum_all_columns([f(t) for t in torch.unbind(x)]), torch.rand(*shape)).transpose(0,1)
+    jac = torch.concat([t.reshape(shape[0], -1, shape[1:]) for t in jacs], dim=1)
     print("jac.shape[1]: " , jac.shape[1], "  jac.shape: ", jac.shape)
 
     count = 0   
