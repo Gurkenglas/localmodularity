@@ -3,7 +3,7 @@ import itertools
 from math import prod
 import os
 import torch
-torch.set_printoptions(precision=3, sci_mode=False)
+torch.set_printoptions(precision=3)
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import torchviz
@@ -15,6 +15,28 @@ from tqdm import tqdm
 from scipy.cluster import hierarchy
 #torch.Tensor.repr = lambda self: self.shape.repr()
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
+
+def eye_like(tensor):
+    return torch.eye(tensor.shape[-1])
+
+import varname
+def sprint(x):
+    print(varname.nameof(x,frame=2,vars_only=False), x)
+
+def diskcache(f):
+    "Doesn't check args, only caches tensors."
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        name = varname.varname()
+        filepath = name+'.pt'
+        sprint(filepath)
+        if os.path.exists(filepath):
+            return torch.load(filepath)
+        else:
+            result = f(*args, **kwargs)
+            torch.save(result, filepath)
+            return result
+    return wrapper
 
 def halfadder(a,b):
     return a*b, (1-a)*b+(1-b)*a
@@ -33,7 +55,7 @@ def adder(ins):
     return torch.stack(sum)
 
 def condmutinf(f, shape):
-    "Calculate the conditional mutual information between the two groups conditional on the input plus noise"
+    "Calculate the conditional mutual information between the two groups conditional on the input plus noise. First shape is batchsize."
 
     # A differentiable function is locally linear, so we pretend that that we're analyzing a linear function. We average over multiple points.
     # How *do* we analyze a linear function? We watch how it transforms measures on the input.
@@ -42,11 +64,9 @@ def condmutinf(f, shape):
     # Pushing Omega (and L) through the linear function produces an activation distribution. Its entropy (relative to its reference measure) is the same as that of Omega, so long as the function is injective.
     # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
 
-    def sum_all_columns(tuple):
-
-    jacs = torch.autograd.functional.jacobian(lambda x: sum_all_columns([f(t) for t in torch.unbind(x)]), torch.rand(*shape)).transpose(0,1)
-    jac = torch.concat([t.reshape(shape[0], -1, shape[1:]) for t in jacs], dim=1)
-    print("jac.shape[1]: " , jac.shape[1], "  jac.shape: ", jac.shape)
+    jac = diskcache(torch.autograd.functional.jacobian)(lambda x: torch.concat(tuple(map(lambda t: t.sum(0).reshape(-1), tqdm(f(x))))), torch.rand(*shape))
+    jac = jac.transpose(0,1)
+    sprint(jac.shape)
 
     count = 0   
     def cluster_(t):
@@ -58,48 +78,65 @@ def condmutinf(f, shape):
     mutinfs = []
     @functools.cache
     def entr(m): 
-        sings = torch.linalg.svd(jac[:,m>=1,:])[1].log()
+        sings = torch.linalg.svdvals(jac[:,m>=1,:]).log()
         return (sings[:,sings[0]>-10] + (1+np.log(2*np.pi))).sum(1).mean()
 
-    torch_precision = np.log(2**(-55))  #approximation of minimal variance of a dimension of activation space
-    
+    # cov = jac @ jac.transpose(1,2)
+    # @functools.cache
+    # def entrcov(m):
+    #     sparsemask = m.to_sparse()
+    #     sparse2dmask = sparsemask * sparsemask.transpose(0,1)
+    #     #block = cov[:,m>=1,:][:,:,m>=1]
+    #     block = cov.sparse_mask(sparse2dmask)
+    #     return (block+eye_like(block)*(np.e**(-20))).logdet().add(m.sum()*20).div(2).mean()
+
     @functools.cache
-    def slightly_different_entropy(m):	
-        sings = torch.linalg.svd(jac[:,m>=1,:])[1].log()[:, :jac.shape[2]]
+    def entr2(m):
+        return torch.linalg.svdvals(jac[:,m>=1,:]).log2().add(torch.tensor(15)).maximum(torch.tensor(0)).sum(1).mean()
 
-        #if(torch.flatten(sings[:, jac.shape[2]:]).max() > -60):
-            #print("interesting case: mask:", m, " , sings: ", sings)
-
-        sings[sings < torch_precision] = torch_precision
-        return (sings - torch_precision).sum(1).mean()
-
-    def mutinf(s):
-        a,b  = sorted(list(s), key = lambda t: t.index)
-        return (slightly_different_entropy(a) + slightly_different_entropy(b))/slightly_different_entropy(a+b)
+    def mutinf(a,b):
+        ab = a+b
+        #ab.entr2 = torch.linalg.svdvals(jac[:,m>=1,:]).log2().add(torch.tensor(15)).maximum(torch.tensor(0)).sum(1).mean()
+        m = -(entr2(a) + entr2(b))/entr2(ab)
+        m.a = a
+        m.b = b
+        m.ab = ab
+        return m
 
     leaves = torch.eye(jac.shape[1]).unbind()
+    #for leaf in leaves:
     clusters = set([cluster_(t) for t in leaves])
-    linkage = []        
-    while len(clusters)>1:
-        s = max(itertools.combinations(clusters, 2), key=mutinf)
-        a,b = s
-        clusters.remove(a)
-        clusters.remove(b)
-        c = cluster_(a+b)
+    linkage = []
+    import heapq
+    heap = [mutinf(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
+    heapq.heapify(heap)
+    
+    def heapgenerator(heap):
+        while heap:
+            yield heapq.heappop(heap)
+    
+    for m in tqdm(heapgenerator(heap)):
+        if hasattr(m.a, 'parent') or hasattr(m.b, 'parent'):
+            continue
+        clusters.remove(m.a)
+        clusters.remove(m.b)
+        c = cluster_(m.ab)
+        m.a.parent = c
+        m.b.parent = c
+        for d in tqdm(clusters):
+            heapq.heappush(heap, mutinf(c,d))
         clusters.add(c)
-
-        linkage.append([a.index, b.index, slightly_different_entropy(c), c.count_nonzero().item()])
-        mutinfs.append([((a-b).numpy()), mutinf(s).item()]) 
+        linkage.append([m.a.index, m.b.index, entr2(m.ab),c.count_nonzero().item()])
+        mutinfs.append([*((m.a-m.b).numpy()), -m.item()])
 
     plt.figure()    
     dn = hierarchy.dendrogram(linkage)
     leaflist = dn["leaves"]
     #Sort the leaves by their index
     for i,l in enumerate(leaflist):
-        plt.plot(10*(i+0.5), slightly_different_entropy(leaves[l]), "o")
+        plt.plot(10*(i+0.5), entr2(leaves[l]), "o")
     plt.savefig("dendrogram.jpg")
     plt.show()
-
 
     mutinfs = [[*t[leaflist],m] for t,m in mutinfs]
     jac = jac[:,leaflist,:]
@@ -119,15 +156,9 @@ def condmutinf(f, shape):
     #os.system('rm graph_*.jpg')
 #condmutinf(adder, (2,2))
 
-#train a model unless there is one at "model.pt" already
-if not os.path.isfile("model.pt"):
-    model = torchexample.train_network()
-    torchinfo.summary(model)
-    torch.save(model.state_dict(), "model.pt")
-
-#load the model
+weights = diskcache(lambda: torchexample.train_network().state_dict())()
 model = torchexample.NeuralNetwork()
-model.load_state_dict(torch.load("model.pt"))
+model.load_state_dict(weights)
 
 #define a function that wraps a model and given an input returns not the output but a tensor of all numbers computed within the model
 def forward_all(model, input):
@@ -143,3 +174,4 @@ def forward_all(model, input):
     return all_tensors
 
 condmutinf(lambda i: forward_all(model, i), (1, 28*28))
+from line_profiler import LineProfiler

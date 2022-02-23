@@ -8,4 +8,4 @@ saved figures/
 data/
 Mnist_graph
 Mnist_graph.jpg
-model.pt
+*.pt
