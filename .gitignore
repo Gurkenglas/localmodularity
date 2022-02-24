@@ -9,3 +9,7 @@ data/
 Mnist_graph
 Mnist_graph.jpg
 *.pt
+*.png
+*.jpg
+*.csv
+*.lprof
