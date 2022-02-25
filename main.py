@@ -2,6 +2,7 @@ import functools
 import itertools
 from math import prod
 import os
+from typing import Callable
 import torch
 torch.set_printoptions(precision=3)
 import matplotlib.pyplot as plt
@@ -15,8 +16,15 @@ from tqdm import tqdm
 from scipy.cluster import hierarchy
 #torch.Tensor.repr = lambda self: self.shape.repr()
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
+torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
 torch.set_default_dtype(torch.float64)
-import jax
+
+def lse(*args):
+    t = torch.stack(args)
+    tmax = max(t.real)
+    return t.subtract(tmax).exp().sum().log().add(tmax)
+torch.Tensor.lse = lse
+i_times_pi = torch.tensor(np.pi*1j)
 
 def eye_like(tensor):
     return torch.eye(tensor.shape[-1])
@@ -68,82 +76,106 @@ def condmutinf(f, shape):
     # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
 
     jac = torch.autograd.functional.jacobian(lambda x: torch.concat(tuple(map(lambda t: t.sum(0).reshape(-1), tqdm(f(x))))), torch.rand(*shape))
-    jac = jac.transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
+    jac = jac.transpose(0,1) #* 2**20 #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
 
     count = 0   
-    def cluster_(t):
+    def iplusplus(t):
         nonlocal count
         t.index = count
         count += 1
         return t
-
-    class Pair:
-        @functools.cache
+    
+    @functools.cache
+    def cachedpair(a,b):
+        return Pair(a,b)
+    
+    class Pair():
         def __init__(self,ab,c):
+            self.mask=ab.mask + c.mask
+            self.a,self.b=ab,c
             if hasattr(ab,'a'):
-                ac,bc = Pair(ab.a,c), Pair(ab.b,c)
-                # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
-                assert ab.a == ac.a and ac.b == bc.b and ab.b == bc.a
+                ac,bc=cachedpair(ab.a,c),cachedpair(ab.b,c)
+                assert id(ab.a) == id(ac.a) and id(ac.b) == id(bc.b) and id(ab.b) == id(bc.a)
                 a,b,c=ac.a,bc.a,ac.b
-                self.a,self.b=ab,c
-                foo = lambda ac,bc,c: torch.logsumexp(torch.stack([ac()+c(),bc()+c(),0]), dim=0)-c()
-                self.__call__ = lambda self: max([foo(ac,bc,c),foo(ab,bc,b),foo(ac,ab,a)])
+                self.ab,self.ac,self.bc = ab,ac,bc
+                self._a,self._b,self._c = a,b,c
+                assert isinstance(c,torch.Tensor) or c.reify()
+                # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
+                bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+i_times_pi).real
+                self.entr = max([bound(ac,bc,c),bound(ab,bc,b),bound(ac,ab,a)])
             else:
-                self.a,self.b=ab,c
-                self.__call__ = lambda self: torch.logsumexp(torch.stack([ab()+c(),0]), dim=0)-c()
+                self.reify()
+            self.mutinf = self.a.entr + self.b.entr - self.entr # -(entr(a) + entr(b))/entr(ab)
         def reify(self):
-            # this is logdet(I + J@J^T) = logdet(I + J^T@J)
-            entr = torch.linalg.svdvals(jac[:,m>=1,:]).add(torch.tensor(1)).log().sum(1).mean()
-            self.__call__ = lambda self: entr
-            return entr
-
-    def mutinf(a,b): # a was just assembled from two clusters
-        ab = Pair(a,b) #FIXME
-        m = ab()-a()-b()
-        m.a = a
-        m.b = b
-        m.ab = ab
-        m.actualmutinf = lambda: entr(ab)-entr(a)-entr(b)
-        #ab.entr = torch.linalg.svdvals(jac[:,m>=1,:]).log2().add(torch.tensor(15)).maximum(torch.tensor(0)).sum(1).mean()
-        #m = -(entr(a) + entr(b))/entr(ab)
-        return m
+            # this is logdet(I + J@J^T)/2 = logdet(I + J^T@J)/2. wait what? fixme
+            try:
+                bound = self.entr
+            except:
+                bound = 0
+            self.entr = torch.linalg.svdvals(jac[:,self.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean().div(2)
+            try: 
+                assert self.entr >= bound
+            except:
+                a,b,c,ab,ac,bc = self._a,self._b,self._c,self.ab,self.ac,self.bc
+                COV=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:].T@jac[0,m.mask>=1,:]).logdet()/2
+                cov=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:]@jac[0,m.mask>=1,:].T).logdet()/2
+                gross=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:].T@jac[0,m.mask>=1,:])
+                seven=lambda foo:{x_:foo(x) for x_,x in zip(["a","b","c","ab","ac","bc","abc"],[a,b,c,ab,ac,bc,self])}
+                print([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
+                print([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
+                print(seven(gross)['abc'].det()+seven(gross)['c'].det()-seven(gross)['ac'].det()-seven(gross)['bc'].det())
+                print
+                print("done") #torch.stack(list(seven(gross).values()))
+            #logdetj = torch.linalg.svdvals(jac[:,m>=1,:]).log()
+            #x²+1=(x+i)(x-i)=|x+i|²
+            #entr = lse(logdetj,logdetj/2+log(2),0).sum(1).mean()
+            self.mutinf = self.a.entr + self.b.entr - self.entr
+            self.reify = lambda: True
+            return False
+        def __lt__(self,other):
+            return self.mutinf > other.mutinf #maxheap
+        def __hash__(self):
+            return self.index
 
     leaves = torch.eye(jac.shape[1]).unbind()
-    clusters = set([cluster_(t) for t in leaves])
+    clusters = set([iplusplus(t) for t in leaves])
+    for l in leaves:
+        l.mask = l
+        l.__hash__ = lambda: l.index
+        l.entr = torch.linalg.svdvals(jac[:,l.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean().div(2)
     linkage = []
     mutinfs = []
-    import heapq
-    heap = [mutinf(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
+    import heapq 
+    heap = [cachedpair(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
     heapq.heapify(heap)
     
     def heapgenerator(heap):
         while heap:
-            m = heapq.heappop(heap)
-            if hasattr(m.a, 'parent') or hasattr(m.b, 'parent'):
-                continue
-            yield m
+            p = heapq.heappop(heap)
+            if hasattr(p.a, 'parent') or hasattr(p.b, 'parent'): continue
+            if p.reify(): yield p
+            else: heapq.heappush(heap, p)
     
-    for m in tqdm(heapgenerator(heap)):
-        clusters.remove(m.a)
-        clusters.remove(m.b)
-        ab = cluster_(m.ab)
-        m.a.parent = ab
-        m.b.parent = ab
-        linkage.append([m.a.index, m.b.index, ab().reify(),ab.count_nonzero().item()])
-        mutinfs.append([((m.a-m.b).numpy()), -m.item()])
+    for p in tqdm(heapgenerator(heap)):
+        clusters.remove(p.a)
+        clusters.remove(p.b)
+        iplusplus(p)
+        p.a.parent = p
+        p.b.parent = p
+        linkage.append([p.a.index, p.b.index, p.entr, p.mask.count_nonzero().item()])
+        mutinfs.append([(p.a.mask-p.b.mask).numpy(), p.mutinf.numpy()])
         for c in clusters:
-            newpairs = Pair(ab.a,c)
-            heapq.heappush(heap, mutinf(ab,c))
-        clusters.add(ab)
+            heapq.heappush(heap, cachedpair(p,c))
+        clusters.add(p)
 
     plt.figure()    
     dn = hierarchy.dendrogram(linkage)
     leaflist = dn["leaves"]
     #Sort the leaves by their index
     for i,l in enumerate(leaflist):
-        plt.plot(10*(i+0.5), entr(leaves[l]), "o")
+        plt.plot(10*(i+0.5), leaves[l].entr, "o")
     plt.savefig("dendrogram.jpg")
     plt.show()
 
@@ -164,7 +196,7 @@ def condmutinf(f, shape):
     #import os
     #os.system('ffmpeg -r 10 -i graph_%d.jpg -vcodec mpeg4 -y graph.mp4')
     #os.system('rm graph_*.jpg')
-condmutinf(adder, (10,30,2))
+condmutinf(adder, (1,2,2))
 
 weights = diskcache(lambda: torchexample.train_network().state_dict())()
 model = torchexample.NeuralNetwork()
