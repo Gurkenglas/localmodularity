@@ -76,7 +76,7 @@ def condmutinf(f, shape):
     # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
 
     jac = torch.autograd.functional.jacobian(lambda x: torch.concat(tuple(map(lambda t: t.sum(0).reshape(-1), tqdm(f(x))))), torch.rand(*shape))
-    jac = jac.transpose(0,1) #* 2**20 #(1+np.log(2*np.pi))??
+    jac = jac.transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
 
@@ -107,14 +107,14 @@ def condmutinf(f, shape):
                 self.entr = max([bound(ac,bc,c),bound(ab,bc,b),bound(ac,ab,a)])
             else:
                 self.reify()
-            self.mutinf = self.a.entr + self.b.entr - self.entr # -(entr(a) + entr(b))/entr(ab)
+            self.mutinf = self.mutinf_substitution() # -(entr(a) + entr(b))/entr(ab)
         def reify(self):
             # this is logdet(I + J@J^T)/2 = logdet(I + J^T@J)/2. wait what? fixme
             try:
                 bound = self.entr
             except:
                 bound = 0
-            self.entr = torch.linalg.svdvals(jac[:,self.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean().div(2)
+            self.entr = torch.linalg.svdvals(jac[:,self.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean()
             try: 
                 assert self.entr >= bound
             except:
@@ -131,20 +131,22 @@ def condmutinf(f, shape):
             #logdetj = torch.linalg.svdvals(jac[:,m>=1,:]).log()
             #x²+1=(x+i)(x-i)=|x+i|²
             #entr = lse(logdetj,logdetj/2+log(2),0).sum(1).mean()
-            self.mutinf = self.a.entr + self.b.entr - self.entr
+            self.mutinf = self.mutinf_substitution()
             self.reify = lambda: True
             return False
         def __lt__(self,other):
             return self.mutinf > other.mutinf #maxheap
         def __hash__(self):
             return self.index
+        def mutinf_substitution(self):
+            return (self.a.entr + self.b.entr) -self.entr #-2*self.entr #-self.entr
 
     leaves = torch.eye(jac.shape[1]).unbind()
     clusters = set([iplusplus(t) for t in leaves])
     for l in leaves:
         l.mask = l
         l.__hash__ = lambda: l.index
-        l.entr = torch.linalg.svdvals(jac[:,l.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean().div(2)
+        l.entr = torch.linalg.svdvals(jac[:,l.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean()
     linkage = []
     mutinfs = []
     import heapq 
@@ -190,13 +192,13 @@ def condmutinf(f, shape):
     
     #colorlist = [mpl.colors.to_hex(dn["leaves_color_list"][leaflist.index(i)]) for i in range(jac.shape[1])]
     exampleinput = torch.rand(*shape, requires_grad=True)
-    torchviz.make_dot(f(exampleinput)).render('graph_from_dendrogram', format='jpg')
+    #torchviz.make_dot(f(exampleinput)).render('graph_from_dendrogram', format='jpg')
     
     #assemble graphs into a video
     #import os
     #os.system('ffmpeg -r 10 -i graph_%d.jpg -vcodec mpeg4 -y graph.mp4')
     #os.system('rm graph_*.jpg')
-condmutinf(adder, (1,2,2))
+condmutinf(adder, (1,20,2))
 
 weights = diskcache(lambda: torchexample.train_network().state_dict())()
 model = torchexample.NeuralNetwork()
