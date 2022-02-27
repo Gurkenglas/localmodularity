@@ -19,13 +19,6 @@ torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *a
 torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
 torch.set_default_dtype(torch.float64)
 
-def lse(*args):
-    t = torch.stack(args)
-    tmax = max(t.real)
-    return t.subtract(tmax).exp().sum().log().add(tmax)
-torch.Tensor.lse = lse
-i_times_pi = torch.tensor(np.pi*1j)
-
 def eye_like(tensor):
     return torch.eye(tensor.shape[-1])
 
@@ -79,7 +72,17 @@ def condmutinf(f, shape):
     jac = jac.transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
-    entr = lambda c: torch.linalg.svdvals(jac[:,c.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean()
+    
+    def lse(*args):
+        t = torch.stack(args)
+        tmax = max(t.real)
+        return t.subtract(tmax).exp().sum().log().add(tmax)
+    torch.Tensor.lse = lse
+    i_times_pi = torch.tensor(np.pi*1j)
+    entr = lambda c: torch.linalg.svdvals(jac[:,c.mask>=1,:]).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
+    mutinf = lambda c: (c.a.entr + c.b.entr) -c.entr #-2*c.entr #/c.entr
+    # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
+    bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+i_times_pi).real
 
     count = 0   
     def iplusplus(t):
@@ -103,12 +106,10 @@ def condmutinf(f, shape):
                 self.ab,self.ac,self.bc = ab,ac,bc
                 self._a,self._b,self._c = a,b,c
                 assert isinstance(c,torch.Tensor) or c.reify()
-                # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
-                bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+i_times_pi).real
                 self.entr = max([bound(ac,bc,c),bound(ab,bc,b),bound(ac,ab,a)])
+                self.mutinf = mutinf(self)
             else:
                 self.reify()
-            self.mutinf = self.mutinf_substitution() # -(entr(a) + entr(b))/entr(ab)
         def reify(self):
             # this is logdet(I + J@J^T)/2 = logdet(I + J^T@J)/2. wait what? fixme
             try:
@@ -132,15 +133,13 @@ def condmutinf(f, shape):
             #logdetj = torch.linalg.svdvals(jac[:,m>=1,:]).log()
             #x²+1=(x+i)(x-i)=|x+i|²
             #entr = lse(logdetj,logdetj/2+log(2),0).sum(1).mean()
-            self.mutinf = self.mutinf_substitution()
+            self.mutinf = mutinf(self)
             self.reify = lambda: True
             return False
         def __lt__(self,other):
             return self.mutinf > other.mutinf #maxheap
         def __hash__(self):
             return self.index
-        def mutinf_substitution(self):
-            return (self.a.entr + self.b.entr) -self.entr #-2*self.entr #-self.entr
 
     leaves = torch.eye(jac.shape[1]).unbind()
     clusters = set([iplusplus(t) for t in leaves])
@@ -199,7 +198,7 @@ def condmutinf(f, shape):
     #import os
     #os.system('ffmpeg -r 10 -i graph_%d.jpg -vcodec mpeg4 -y graph.mp4')
     #os.system('rm graph_*.jpg')
-condmutinf(adder, (1,20,2))
+#condmutinf(adder, (1,5,2))
 
 weights = diskcache(lambda: torchexample.train_network().state_dict())()
 model = torchexample.NeuralNetwork()
@@ -218,5 +217,5 @@ def forward_all(model, input):
         layer.register_forward_hook(None)
     return all_tensors
 
-#condmutinf(lambda i: forward_all(model, i), (1, 28*28))
+condmutinf(lambda i: forward_all(model, i), (1, 28*28))
 #from line_profiler import LineProfiler
