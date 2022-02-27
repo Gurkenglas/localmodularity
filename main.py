@@ -79,6 +79,7 @@ def condmutinf(f, shape):
     jac = jac.transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
+    entr = lambda c: torch.linalg.svdvals(jac[:,c.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean()
 
     count = 0   
     def iplusplus(t):
@@ -114,7 +115,7 @@ def condmutinf(f, shape):
                 bound = self.entr
             except:
                 bound = 0
-            self.entr = torch.linalg.svdvals(jac[:,self.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean()
+            self.entr = entr(self)
             try: 
                 assert self.entr >= bound
             except:
@@ -123,9 +124,9 @@ def condmutinf(f, shape):
                 cov=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:]@jac[0,m.mask>=1,:].T).logdet()/2
                 gross=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:].T@jac[0,m.mask>=1,:])
                 seven=lambda foo:{x_:foo(x) for x_,x in zip(["a","b","c","ab","ac","bc","abc"],[a,b,c,ab,ac,bc,self])}
-                print([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
-                print([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
-                print(seven(gross)['abc'].det()+seven(gross)['c'].det()-seven(gross)['ac'].det()-seven(gross)['bc'].det())
+                sprint([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
+                sprint([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
+                sprint(seven(gross)['abc'].det()+seven(gross)['c'].det()-seven(gross)['ac'].det()-seven(gross)['bc'].det())
                 print
                 print("done") #torch.stack(list(seven(gross).values()))
             #logdetj = torch.linalg.svdvals(jac[:,m>=1,:]).log()
@@ -146,7 +147,7 @@ def condmutinf(f, shape):
     for l in leaves:
         l.mask = l
         l.__hash__ = lambda: l.index
-        l.entr = torch.linalg.svdvals(jac[:,l.mask>=1,:]).pow(2).add(torch.tensor(1)).log().sum(1).mean()
+        l.entr = entr(l)
     linkage = []
     mutinfs = []
     import heapq 
