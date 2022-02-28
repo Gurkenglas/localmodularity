@@ -7,11 +7,7 @@ from typing import Callable
 import torch
 torch.set_printoptions(precision=3)
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-import torchviz
-import networkgraph
 import torchexample
-import torchinfo
 import numpy as np
 from tqdm import tqdm
 from scipy.cluster import hierarchy
@@ -19,11 +15,10 @@ from scipy.cluster import hierarchy
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
 torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
 torch.set_default_dtype(torch.float64)
+eye_like = lambda t: torch.eye(t.shape[-1])
 Object = lambda **kwargs: type("Object", (), kwargs) # Anonymous objects! :)
 import varname
-
-eye_like = lambda t: torch.eye(t.shape[-1])
-sprint = lambda *args: [print(varname.nameof(a,frame=2,vars_only=False), a) for a in args]
+sprint = lambda *args: [print(varname.nameof(a,frame=3,vars_only=False), a) for a in args]
 
 def diskcache(f):
     "Doesn't check args, only caches tensors."
@@ -38,7 +33,6 @@ def diskcache(f):
     return wrapper
 
 halfadder = lambda a,b: (a*b, (1-a)*b+(1-b)*a)
-
 def adder(ins):
     ins = ins.permute(1,2,0)
     sum = []
@@ -66,22 +60,18 @@ def condmutinf(f, shape):
     testoutput = tuple(map(lambda t: t.sum(0).reshape(-1),f(testinput)))
 
     jac = torch.autograd.functional.jacobian(lambda x: tuple(map(lambda t: t.sum(0).reshape(-1), tqdm(f(x)))), torch.rand(*shape))
-    colors = [i for i,j in enumerate(jac) for _ in range(j.shape[0])]
-    colors = [plt.cm.tab10(i/len(jac)) for i in colors]
-    jac = torch.concat(jac)
-    jac = jac.transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
+    colors = [plt.cm.tab10(i/len(jac)) for i,j in enumerate(jac) for _ in range(j.shape[0])]
+    jac = torch.concat(jac).transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
     
-    def lse(*args):
+    def lse(*args): #torch.Tensor.lse = lse
         t = torch.stack(args)
         tmax = max(t.real)
         return t.subtract(tmax).exp().sum().log().add(tmax)
-    #torch.Tensor.lse = lse
     entr = lambda c: torch.linalg.svdvals(jac[:,c.mask>=1,:]).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
     mutinf = lambda c: (c.a.entr + c.b.entr) -2*c.entr #-c.entr #/c.entr
-    # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
-    bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+np.pi*1j).real
+    bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+np.pi*1j).real # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
 
     count = 0   
     def iplusplus(t):
@@ -90,10 +80,7 @@ def condmutinf(f, shape):
         count += 1
         return t
     
-    @functools.cache
-    def cachedpair(a,b):
-        return Pair(a,b)
-    
+    cachedpair = functools.cache(Pair)
     class Pair():
         def __init__(self,ab,c):
             self.a,self.b=ab,c
@@ -109,7 +96,7 @@ def condmutinf(f, shape):
             else:
                 self.reify()
         def reify(self):
-            self.mask=self.a.mask + self.b.mask
+            self.mask = self.a.mask + self.b.mask
             exact = entr(self)
             try:
                 assert getattr(self,'entr',-torch.inf) <= exact
