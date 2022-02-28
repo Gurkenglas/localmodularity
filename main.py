@@ -20,14 +20,10 @@ torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *a
 torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
 torch.set_default_dtype(torch.float64)
 Object = lambda **kwargs: type("Object", (), kwargs) # Anonymous objects! :)
-
-def eye_like(tensor):
-    return torch.eye(tensor.shape[-1])
-
 import varname
-def sprint(*args):
-    for a in args:
-        print(varname.nameof(a,frame=2,vars_only=False), a)
+
+eye_like = lambda t: torch.eye(t.shape[-1])
+sprint = lambda *args: [print(varname.nameof(a,frame=2,vars_only=False), a) for a in args]
 
 def diskcache(f):
     "Doesn't check args, only caches tensors."
@@ -35,17 +31,13 @@ def diskcache(f):
     def wrapper(*args, **kwargs):
         name = varname.varname()
         filepath = name+'.pt'
-        sprint(filepath)
-        if os.path.exists(filepath):
-            return torch.load(filepath)
-        else:
-            result = f(*args, **kwargs)
-            torch.save(result, filepath)
-            return result
+        if os.path.exists(filepath): return torch.load(filepath)
+        result = f(*args, **kwargs)
+        torch.save(result, filepath)
+        return result
     return wrapper
 
-def halfadder(a,b):
-    return a*b, (1-a)*b+(1-b)*a
+halfadder = lambda a,b: (a*b, (1-a)*b+(1-b)*a)
 
 def adder(ins):
     ins = ins.permute(1,2,0)
