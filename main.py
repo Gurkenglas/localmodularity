@@ -70,10 +70,8 @@ def condmutinf(f, shape):
     # On the level of data and not spaces, we also work with the distribution Omega that the training data was sampled from.
     # Pushing Omega (and L) through the linear function produces an activation distribution. Its entropy (relative to its reference measure) is the same as that of Omega, so long as the function is injective.
     # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
-
     testinput = torch.rand(*shape)
     testoutput = tuple(map(lambda t: t.sum(0).reshape(-1),f(testinput)))
-
 
     jac = torch.autograd.functional.jacobian(lambda x: tuple(map(lambda t: t.sum(0).reshape(-1), tqdm(f(x)))), torch.rand(*shape))
     colors = [i for i,j in enumerate(jac) for _ in range(j.shape[0])]
@@ -90,7 +88,7 @@ def condmutinf(f, shape):
         return t.subtract(tmax).exp().sum().log().add(tmax)
     #torch.Tensor.lse = lse
     entr = lambda c: torch.linalg.svdvals(jac[:,c.mask>=1,:]).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
-    mutinf = lambda c: (c.a.entr + c.b.entr) -c.entr #-2*c.entr #/c.entr
+    mutinf = lambda c: (c.a.entr + c.b.entr) -2*c.entr #-c.entr #/c.entr
     # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
     bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+np.pi*1j).real
 
@@ -199,7 +197,7 @@ def condmutinf(f, shape):
     #import os
     #os.system('ffmpeg -r 10 -i graph_%d.jpg -vcodec mpeg4 -y graph.mp4')
     #os.system('rm graph_*.jpg')
-condmutinf(adder, (1,5,2))
+#condmutinf(adder, (1,2,2))
 
 weights = diskcache(lambda: torchexample.train_network().state_dict())()
 model = torchexample.NeuralNetwork()
@@ -207,26 +205,21 @@ model.load_state_dict(weights)
 
 def nested(*args): #why was nested deprecated??
     class Nested:
-        def __enter__(self):
-            for a in args:
-                a.__enter__()
-        def __exit__(self,*exc):
-            for a in args:
-                a.__exit__()
+        def __enter__(self): [a.__enter__() for a in args]
+        def __exit__(self,*exc): [a.__exit__() for a in args]
     return Nested()
 
 # wrap a model to return all intermediate tensors
 def forward_all(model, input):
-    all_tensors = [input]
+    all_tensors = []#input]
     def hook(layer):
         h = layer.register_forward_hook(lambda module, input, output: all_tensors.append(output))
         return contextlib.closing(Object(close = lambda: h.remove()))
-    
-    with nested(*[hook(m) for m in model.modules()]):
+    with nested(*[hook(m) for m in model.modules() if isinstance(m, torch.nn.Linear)]):
         model(input)
     return tuple(all_tensors)
 
-#condmutinf(lambda i: forward_all(model, i), (1, 28*28))
+condmutinf(lambda i: forward_all(model, i), (1, 28*28))
 #from line_profiler import LineProfiler
 
 #make dendrogram work
