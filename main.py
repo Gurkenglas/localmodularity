@@ -1,3 +1,4 @@
+import contextlib
 import functools
 import itertools
 from math import prod
@@ -18,13 +19,15 @@ from scipy.cluster import hierarchy
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
 torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
 torch.set_default_dtype(torch.float64)
+Object = lambda **kwargs: type("Object", (), kwargs) # Anonymous objects! :)
 
 def eye_like(tensor):
     return torch.eye(tensor.shape[-1])
 
 import varname
-def sprint(x):
-    print(varname.nameof(x,frame=2,vars_only=False), x)
+def sprint(*args):
+    for a in args:
+        print(varname.nameof(a,frame=2,vars_only=False), a)
 
 def diskcache(f):
     "Doesn't check args, only caches tensors."
@@ -68,7 +71,15 @@ def condmutinf(f, shape):
     # Pushing Omega (and L) through the linear function produces an activation distribution. Its entropy (relative to its reference measure) is the same as that of Omega, so long as the function is injective.
     # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
 
-    jac = torch.autograd.functional.jacobian(lambda x: torch.concat(tuple(map(lambda t: t.sum(0).reshape(-1), tqdm(f(x))))), torch.rand(*shape))
+    testinput = torch.rand(*shape)
+    testoutput = tuple(map(lambda t: t.sum(0).reshape(-1),f(testinput)))
+
+
+    jac = torch.autograd.functional.jacobian(lambda x: tuple(map(lambda t: t.sum(0).reshape(-1), tqdm(f(x)))), torch.rand(*shape))
+    colors = [i for i,j in enumerate(jac) for _ in range(j.shape[0])]
+    #turn the list of numbers into a list of colors
+    colors = [plt.cm.tab10(i/len(jac)) for i in colors]
+    jac = torch.concat(jac)
     jac = jac.transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
@@ -77,12 +88,11 @@ def condmutinf(f, shape):
         t = torch.stack(args)
         tmax = max(t.real)
         return t.subtract(tmax).exp().sum().log().add(tmax)
-    torch.Tensor.lse = lse
-    i_times_pi = torch.tensor(np.pi*1j)
+    #torch.Tensor.lse = lse
     entr = lambda c: torch.linalg.svdvals(jac[:,c.mask>=1,:]).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
     mutinf = lambda c: (c.a.entr + c.b.entr) -c.entr #-2*c.entr #/c.entr
     # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
-    bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+i_times_pi).real
+    bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+np.pi*1j).real
 
     count = 0   
     def iplusplus(t):
@@ -111,14 +121,9 @@ def condmutinf(f, shape):
             else:
                 self.reify()
         def reify(self):
-            # this is logdet(I + J@J^T)/2 = logdet(I + J^T@J)/2. wait what? fixme
+            exact = entr(self)
             try:
-                bound = self.entr
-            except:
-                bound = 0
-            self.entr = entr(self)
-            try: 
-                assert self.entr >= bound
+                assert getattr(self,'entr',-torch.inf) <= exact
             except:
                 a,b,c,ab,ac,bc = self._a,self._b,self._c,self.ab,self.ac,self.bc
                 COV=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:].T@jac[0,m.mask>=1,:]).logdet()/2
@@ -128,11 +133,8 @@ def condmutinf(f, shape):
                 sprint([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
                 sprint([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
                 sprint(seven(gross)['abc'].det()+seven(gross)['c'].det()-seven(gross)['ac'].det()-seven(gross)['bc'].det())
-                print
                 print("done") #torch.stack(list(seven(gross).values()))
-            #logdetj = torch.linalg.svdvals(jac[:,m>=1,:]).log()
-            #x²+1=(x+i)(x-i)=|x+i|²
-            #entr = lse(logdetj,logdetj/2+log(2),0).sum(1).mean()
+            self.entr = exact
             self.mutinf = mutinf(self)
             self.reify = lambda: True
             return False
@@ -175,9 +177,8 @@ def condmutinf(f, shape):
     plt.figure()    
     dn = hierarchy.dendrogram(linkage)
     leaflist = dn["leaves"]
-    #Sort the leaves by their index
     for i,l in enumerate(leaflist):
-        plt.plot(10*(i+0.5), leaves[l].entr, "o")
+        plt.plot(10*(i+0.5), leaves[l].entr, "o", color=colors[leaves[l].index])
     plt.savefig("dendrogram.jpg")
     plt.show()
 
@@ -187,7 +188,7 @@ def condmutinf(f, shape):
     import csv
     with open("covmutinf.csv", "w", newline ='') as file:
         writer = csv.writer(file)
-        writer.writerows(cov)
+        writer.writerows(cov.numpy())
         writer.writerows(mutinfs)
     
     #colorlist = [mpl.colors.to_hex(dn["leaves_color_list"][leaflist.index(i)]) for i in range(jac.shape[1])]
@@ -198,24 +199,36 @@ def condmutinf(f, shape):
     #import os
     #os.system('ffmpeg -r 10 -i graph_%d.jpg -vcodec mpeg4 -y graph.mp4')
     #os.system('rm graph_*.jpg')
-#condmutinf(adder, (1,5,2))
+condmutinf(adder, (1,5,2))
 
 weights = diskcache(lambda: torchexample.train_network().state_dict())()
 model = torchexample.NeuralNetwork()
 model.load_state_dict(weights)
 
-#define a function that wraps a model and given an input returns not the output but a tensor of all numbers computed within the model
-def forward_all(model, input):
-    all_tensors = (input.reshape(-1),)
-    def hook(model, input, output):
-        nonlocal all_tensors
-        all_tensors += (output,)
-    for layer in model.children():
-        layer.register_forward_hook(hook)
-    model(input)
-    for layer in model.children():
-        layer.register_forward_hook(None)
-    return all_tensors
+def nested(*args): #why was nested deprecated??
+    class Nested:
+        def __enter__(self):
+            for a in args:
+                a.__enter__()
+        def __exit__(self,*exc):
+            for a in args:
+                a.__exit__()
+    return Nested()
 
-condmutinf(lambda i: forward_all(model, i), (1, 28*28))
+# wrap a model to return all intermediate tensors
+def forward_all(model, input):
+    all_tensors = [input]
+    def hook(layer):
+        h = layer.register_forward_hook(lambda module, input, output: all_tensors.append(output))
+        return contextlib.closing(Object(close = lambda: h.remove()))
+    
+    with nested(*[hook(m) for m in model.modules()]):
+        model(input)
+    return tuple(all_tensors)
+
+#condmutinf(lambda i: forward_all(model, i), (1, 28*28))
 #from line_profiler import LineProfiler
+
+#make dendrogram work
+#optimize heap thing further
+#write actual agenda code
