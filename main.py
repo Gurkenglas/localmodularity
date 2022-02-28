@@ -111,8 +111,7 @@ def condmutinf(f, shape):
             self.mutinf = mutinf(self)
             self.reify = lambda: True
             return False
-        def __lt__(self,other):
-            return self.mutinf > other.mutinf #maxheap
+        __lt__ = lambda self,other: self.mutinf > other.mutinf #maxheap
     cachedpair = functools.cache(Pair)
 
     leaves = torch.eye(jac.shape[1]).unbind()
