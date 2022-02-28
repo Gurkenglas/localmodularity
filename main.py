@@ -197,7 +197,7 @@ def condmutinf(f, shape):
     #import os
     #os.system('ffmpeg -r 10 -i graph_%d.jpg -vcodec mpeg4 -y graph.mp4')
     #os.system('rm graph_*.jpg')
-#condmutinf(adder, (1,2,2))
+condmutinf(adder, (1,2,2))
 
 weights = diskcache(lambda: torchexample.train_network().state_dict())()
 model = torchexample.NeuralNetwork()
@@ -219,7 +219,8 @@ def forward_all(model, input):
         model(input)
     return tuple(all_tensors)
 
-condmutinf(lambda i: forward_all(model, i), (1, 28*28))
+with torch.no_grad():
+    condmutinf(lambda i: forward_all(model, i), (1, 28*28))
 #from line_profiler import LineProfiler
 
 #make dendrogram work
