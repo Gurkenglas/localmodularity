@@ -97,9 +97,7 @@ def condmutinf(f, shape):
         def reify(self):
             self.mask = self.a.mask + self.b.mask
             exact = entr(self)
-            try:
-                assert getattr(self,'entr',-torch.inf) <= exact
-            except:
+            if getattr(self,'entr',-torch.inf) > exact:
                 a,b,c,ab,ac,bc = self._a,self._b,self._c,self.ab,self.ac,self.bc
                 COV=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:].T@jac[0,m.mask>=1,:]).logdet()/2
                 cov=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:]@jac[0,m.mask>=1,:].T).logdet()/2
@@ -115,8 +113,6 @@ def condmutinf(f, shape):
             return False
         def __lt__(self,other):
             return self.mutinf > other.mutinf #maxheap
-        def __hash__(self):
-            return self.index
     cachedpair = functools.cache(Pair)
 
     leaves = torch.eye(jac.shape[1]).unbind()
