@@ -80,7 +80,6 @@ def condmutinf(f, shape):
         count += 1
         return t
     
-    cachedpair = functools.cache(Pair)
     class Pair():
         def __init__(self,ab,c):
             self.a,self.b=ab,c
@@ -118,6 +117,7 @@ def condmutinf(f, shape):
             return self.mutinf > other.mutinf #maxheap
         def __hash__(self):
             return self.index
+    cachedpair = functools.cache(Pair)
 
     leaves = torch.eye(jac.shape[1]).unbind()
     clusters = set([iplusplus(t) for t in leaves])
