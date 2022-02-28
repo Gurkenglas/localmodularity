@@ -67,7 +67,6 @@ def condmutinf(f, shape):
 
     jac = torch.autograd.functional.jacobian(lambda x: tuple(map(lambda t: t.sum(0).reshape(-1), tqdm(f(x)))), torch.rand(*shape))
     colors = [i for i,j in enumerate(jac) for _ in range(j.shape[0])]
-    #turn the list of numbers into a list of colors
     colors = [plt.cm.tab10(i/len(jac)) for i in colors]
     jac = torch.concat(jac)
     jac = jac.transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
@@ -97,7 +96,6 @@ def condmutinf(f, shape):
     
     class Pair():
         def __init__(self,ab,c):
-            self.mask=ab.mask + c.mask
             self.a,self.b=ab,c
             if hasattr(ab,'a'):
                 ac,bc=cachedpair(ab.a,c),cachedpair(ab.b,c)
@@ -111,6 +109,7 @@ def condmutinf(f, shape):
             else:
                 self.reify()
         def reify(self):
+            self.mask=self.a.mask + self.b.mask
             exact = entr(self)
             try:
                 assert getattr(self,'entr',-torch.inf) <= exact
