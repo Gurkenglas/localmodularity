@@ -109,7 +109,7 @@ def condmutinf(f, shape):
         l.entr = entr(l)
     linkage = []
     heap = [cachedpair(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
-    [pair.reify() for pair in heap]
+    [pair.reify() for pair in tqdm(heap)]
     heapq.heapify(heap)
     
     def heapgenerator(heap):
