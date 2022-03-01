@@ -58,9 +58,9 @@ def condmutinf(f, shape):
     # Pushing Omega (and L) through the linear function produces an activation distribution. Its entropy (relative to its reference measure) is the same as that of Omega, so long as the function is injective.
     # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
     testinput = torch.rand(*shape)
-    testoutput = tuple(map(lambda t: t.sum(0).reshape(-1),f(testinput)))
+    testoutput = [t.sum(0).reshape(-1) for t in f(testinput)]
 
-    jac = torch.autograd.functional.jacobian(lambda x: tuple(map(lambda t: t.sum(0).reshape(-1), tqdm(f(x)))), torch.rand(*shape))
+    jac = torch.autograd.functional.jacobian(lambda x: tuple(t.sum(0).reshape(-1) for t in f(x)), torch.rand(*shape))
     colors = [plt.cm.tab10(i/len(jac)) for i,j in enumerate(jac) for _ in range(j.shape[0])]
     jac = torch.concat(jac).transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
@@ -71,7 +71,7 @@ def condmutinf(f, shape):
         tmax = max(t.real)
         return t.subtract(tmax).exp().sum().log().add(tmax)
     entr = lambda c: torch.linalg.svdvals(c.jac).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
-    mutinf = lambda c: sum(map(lambda d:d.entr,c)) -2*c.entr #-c.entr #/c.entr
+    mutinf = lambda c: sum(d.entr for d in c) -2*c.entr #-c.entr #/c.entr
     bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+np.pi*1j).real # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
 
     count = 0   
@@ -81,6 +81,7 @@ def condmutinf(f, shape):
         count += 1
         #t.__repr__ = lambda: f'{t.index}'
         return t
+    
     class Pair(set):
         def reify(self):
             self.jac = torch.concat([c.jac for c in self],1)
@@ -114,7 +115,7 @@ def condmutinf(f, shape):
     def heapgenerator(heap):
         while heap:
             p = heapq.heappop(heap)
-            if any(map(lambda c: c.jac is None, p)): continue
+            if any(c.jac is None for c in p): continue
             currententr = p.entr
             if p.reify(): yield p
             else:
