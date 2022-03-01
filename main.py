@@ -12,6 +12,9 @@ import numpy as np
 from tqdm import tqdm
 from scipy.cluster import hierarchy
 import heapq
+from torch.utils.data import DataLoader
+from torchvision import datasets
+from torchvision.transforms import ToTensor
 #torch.Tensor.repr = lambda self: self.shape.repr()
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
 torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
@@ -48,6 +51,22 @@ def adder(ins):
     sum.append(carry)
     return torch.stack(activations)
 
+def correlation_from_covariance(covariance): #cov = jac @ jac.transpose(1,2)
+    covariance = covariance[0] #throw away batches, this is only for debugging
+    v = np.sqrt(np.diag(covariance))
+    outer_v = np.outer(v, v)
+    correlation = covariance / outer_v
+    correlation[covariance == 0] = 0
+    return correlation
+
+def printallnondiagonalbigs(corr, threshold):
+    corrbigvalues = torch.where(torch.abs(corr) > threshold, 1., 0.)
+    corrbigindices = corrbigvalues.nonzero()
+    for i in range(corrbigindices.__len__()):
+        if corrbigindices[i,0] < corrbigindices[i,1]:
+            print(corrbigindices[i]) 
+            print(corr[corrbigindices[i,0], corrbigindices[i,1]])
+
 def condmutinf(f, shape):
     "Calculate the conditional mutual information between the two groups conditional on the input plus noise. First shape is batchsize."
 
@@ -59,10 +78,15 @@ def condmutinf(f, shape):
     # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
     testinput = torch.rand(*shape)
     testoutput = [t.sum(0).reshape(-1) for t in f(testinput)]
-
-    jac = torch.autograd.functional.jacobian(lambda x: tuple(t.sum(0).reshape(-1) for t in f(x)), torch.rand(*shape))
+    #get an exampleinput from the dataset of MNIST
+    train_dataloader,test_dataloader = (
+        DataLoader(datasets.MNIST(root="data",train=b,download=True,transform=ToTensor()),batch_size=shape[0]) for b in (True, False)
+        )
+    testinput = next(iter(test_dataloader))[0]
+    resolution = 0 #setting this too low will cause the mutual information to be dominated by the noise, too high will cause the entropy to be apparently proportional to the size of the cluster
+    jac = torch.autograd.functional.jacobian(lambda x: tuple(t.sum(0).reshape(-1) for t in f(x)), testinput)
     colors = [plt.cm.tab10(i/len(jac)) for i,j in enumerate(jac) for _ in range(j.shape[0])]
-    jac = torch.concat(jac).transpose(0,1) * 2**20 #(1+np.log(2*np.pi))??
+    jac = torch.concat(jac).transpose(0,1) * 2**(resolution) #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
     
@@ -143,7 +167,7 @@ def condmutinf(f, shape):
         plt.plot(10*(i+0.5), leaves[l].entr, "o", color=colors[leaves[l].index])
     plt.savefig("dendrogram.jpg")
     plt.show()
-condmutinf(adder, (1,2,2))
+#condmutinf(adder, (1,2,2))
 
 weights = diskcache(lambda: torchexample.train_network().state_dict())()
 model = torchexample.NeuralNetwork()
@@ -161,7 +185,7 @@ def forward_all(model, input):
     def hook(layer):
         h = layer.register_forward_hook(lambda module, input, output: all_tensors.append(output))
         return contextlib.closing(Object(close = lambda: h.remove()))
-    with nested(*[hook(m) for m in model.modules() if isinstance(m, torch.nn.Linear)]):
+    with nested(*[hook(m) for m in model[2:] if isinstance(m, torch.nn.Linear)]):
         model(input)
     return tuple(all_tensors)
 
