@@ -11,6 +11,7 @@ import torchexample
 import numpy as np
 from tqdm import tqdm
 from scipy.cluster import hierarchy
+import heapq
 #torch.Tensor.repr = lambda self: self.shape.repr()
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
 torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
@@ -69,8 +70,8 @@ def condmutinf(f, shape):
         t = torch.stack(args)
         tmax = max(t.real)
         return t.subtract(tmax).exp().sum().log().add(tmax)
-    entr = lambda c: torch.linalg.svdvals(jac[:,c.mask>=1,:]).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
-    mutinf = lambda c: (c.a.entr + c.b.entr) -2*c.entr #-c.entr #/c.entr
+    entr = lambda c: torch.linalg.svdvals(c.jac).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
+    mutinf = lambda c: sum(map(lambda d:d.entr,c)) -2*c.entr #-c.entr #/c.entr
     bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+np.pi*1j).real # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
 
     count = 0   
@@ -78,72 +79,61 @@ def condmutinf(f, shape):
         nonlocal count
         t.index = count
         count += 1
+        #t.__repr__ = lambda: f'{t.index}'
         return t
-    
-    class Pair():
-        def __init__(self,ab,c):
-            self.a,self.b=ab,c
-            if hasattr(ab,'a'):
-                ac,bc=cachedpair(ab.a,c),cachedpair(ab.b,c)
-                assert id(ab.a) == id(ac.a) and id(ac.b) == id(bc.b) and id(ab.b) == id(bc.a)
-                a,b,c=ac.a,bc.a,ac.b
-                self.ab,self.ac,self.bc = ab,ac,bc
-                self._a,self._b,self._c = a,b,c
-                assert isinstance(c,torch.Tensor) or c.reify()
-                self.entr = max([bound(ac,bc,c),bound(ab,bc,b),bound(ac,ab,a)])
-                self.mutinf = mutinf(self)
-            else:
-                self.reify()
+    class Pair(set):
         def reify(self):
-            self.mask = self.a.mask + self.b.mask
-            exact = entr(self)
-            if getattr(self,'entr',-torch.inf) > exact:
-                a,b,c,ab,ac,bc = self._a,self._b,self._c,self.ab,self.ac,self.bc
-                COV=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:].T@jac[0,m.mask>=1,:]).logdet()/2
-                cov=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:]@jac[0,m.mask>=1,:].T).logdet()/2
-                gross=lambda m:(lambda c: c+torch.eye(c.shape[-1]))(jac[0,m.mask>=1,:].T@jac[0,m.mask>=1,:])
-                seven=lambda foo:{x_:foo(x) for x_,x in zip(["a","b","c","ab","ac","bc","abc"],[a,b,c,ab,ac,bc,self])}
-                sprint([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
-                sprint([f"{x_}+{y_}={z_}+{w_}" for (x_,x),(y_,y),(z_,z),(w_,w) in itertools.combinations(seven(cov).items(),4) if torch.allclose(x+y,z+w,rtol=0.01,atol=0)])
-                sprint(seven(gross)['abc'].det()+seven(gross)['c'].det()-seven(gross)['ac'].det()-seven(gross)['bc'].det())
-                print("done") #torch.stack(list(seven(gross).values()))
-            self.entr = exact
+            self.jac = torch.concat([c.jac for c in self],1)
+            self.entr = entr(self)
             self.mutinf = mutinf(self)
             self.reify = lambda: True
             return False
         __lt__ = lambda self,other: self.mutinf > other.mutinf #maxheap
-    cachedpair = functools.cache(Pair)
+        __repr__ = lambda self: f'({self[0].index},{self[1].index})'
+        __hash__ = lambda self: self.index # invariant: not called before index exists
+    
+    def cachedpair(a,b):
+        if a.index > b.index: a,b = b,a
+        return cachedset(a,b)
+    
+    @functools.cache
+    def cachedset(a,b):
+        return Pair((a,b))
 
-    leaves = torch.eye(jac.shape[1]).unbind()
+    leaves = jac.unsqueeze(1).unbind(2)
     clusters = set([iplusplus(t) for t in leaves])
     for l in leaves:
-        l.mask = l
+        l.jac = l
         l.__hash__ = lambda: l.index
         l.entr = entr(l)
     linkage = []
-    mutinfs = []
-    import heapq 
     heap = [cachedpair(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
+    [pair.reify() for pair in heap]
     heapq.heapify(heap)
     
     def heapgenerator(heap):
         while heap:
             p = heapq.heappop(heap)
-            if hasattr(p.a, 'parent') or hasattr(p.b, 'parent'): continue
+            if any(map(lambda c: c.jac is None, p)): continue
+            currententr = p.entr
             if p.reify(): yield p
-            else: heapq.heappush(heap, p)
+            else:
+                assert currententr <= p.entr
+                heapq.heappush(heap, p)
     
-    for p in tqdm(heapgenerator(heap)):
-        clusters.remove(p.a)
-        clusters.remove(p.b)
-        iplusplus(p)
-        p.a.parent = p
-        p.b.parent = p
-        linkage.append([p.a.index, p.b.index, p.entr, p.mask.count_nonzero().item()])
-        mutinfs.append([(p.a.mask-p.b.mask).numpy(), p.mutinf.numpy()])
+    for ab in tqdm(heapgenerator(heap)):
+        a,b = ab # a and b are fungible
+        clusters.remove(a), clusters.remove(b)
+        iplusplus(ab)
+        a.jac = b.jac = None
+        linkage.append([a.index, b.index, ab.entr, ab.jac.shape[1]])
         for c in clusters:
-            heapq.heappush(heap, cachedpair(p,c))
-        clusters.add(p)
+            abc,ac,bc = cachedpair(ab,c),cachedpair(a,c),cachedpair(b,c)
+            assert isinstance(c,torch.Tensor) or c.reify()
+            abc.entr = max([bound(ac,bc,c),bound(ab,bc,b),bound(ac,ab,a)])
+            abc.mutinf = mutinf(abc)
+            heapq.heappush(heap, abc)
+        clusters.add(ab)
 
     plt.figure()    
     dn = hierarchy.dendrogram(linkage)
@@ -152,24 +142,6 @@ def condmutinf(f, shape):
         plt.plot(10*(i+0.5), leaves[l].entr, "o", color=colors[leaves[l].index])
     plt.savefig("dendrogram.jpg")
     plt.show()
-
-    mutinfs = [[*t[leaflist],m] for t,m in mutinfs]
-    jac = jac[:,leaflist,:]
-    cov = jac @ jac.transpose(1,2)
-    import csv
-    with open("covmutinf.csv", "w", newline ='') as file:
-        writer = csv.writer(file)
-        writer.writerows(cov.numpy())
-        writer.writerows(mutinfs)
-    
-    #colorlist = [mpl.colors.to_hex(dn["leaves_color_list"][leaflist.index(i)]) for i in range(jac.shape[1])]
-    exampleinput = torch.rand(*shape, requires_grad=True)
-    #torchviz.make_dot(f(exampleinput)).render('graph_from_dendrogram', format='jpg')
-    
-    #assemble graphs into a video
-    #import os
-    #os.system('ffmpeg -r 10 -i graph_%d.jpg -vcodec mpeg4 -y graph.mp4')
-    #os.system('rm graph_*.jpg')
 condmutinf(adder, (1,2,2))
 
 weights = diskcache(lambda: torchexample.train_network().state_dict())()
