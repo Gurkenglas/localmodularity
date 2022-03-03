@@ -54,10 +54,7 @@ def adder(ins):
 def correlation_from_covariance(covariance): #cov = jac @ jac.transpose(1,2)
     covariance = covariance[0] #throw away batches, this is only for debugging
     v = np.sqrt(np.diag(covariance))
-    outer_v = np.outer(v, v)
-    correlation = covariance / outer_v
-    correlation[covariance == 0] = 0
-    return correlation
+    return (covariance / np.outer(v, v)).nan_to_num(0)
 
 def printallnondiagonalbigs(corr, threshold):
     corrbigvalues = torch.where(torch.abs(corr) > threshold, 1., 0.)
@@ -67,26 +64,13 @@ def printallnondiagonalbigs(corr, threshold):
             print(corrbigindices[i]) 
             print(corr[corrbigindices[i,0], corrbigindices[i,1]])
 
-def condmutinf(f, shape):
+def condmutinf(f):
     "Calculate the conditional mutual information between the two groups conditional on the input plus noise. First shape is batchsize."
-
-    # A differentiable function is locally linear, so we pretend that that we're analyzing a linear function. We average over multiple points.
-    # How *do* we analyze a linear function? We watch how it transforms measures on the input.
-    # Every space is assumed to come equipped with a reference measure. We fix it to the Lebesgue measure L for the input space and then use the pushforward measures for the other spaces.
-    # On the level of data and not spaces, we also work with the distribution Omega that the training data was sampled from.
-    # Pushing Omega (and L) through the linear function produces an activation distribution. Its entropy (relative to its reference measure) is the same as that of Omega, so long as the function is injective.
-    # Now we can project activation space onto subsets of its dimensions, and calculate mutual information.
-    testinput = torch.rand(*shape)
-    testoutput = [t.sum(0).reshape(-1) for t in f(testinput)]
-    #get an exampleinput from the dataset of MNIST
-    train_dataloader,test_dataloader = (
-        DataLoader(datasets.MNIST(root="data",train=b,download=True,transform=ToTensor()),batch_size=shape[0]) for b in (True, False)
-        )
-    testinput = next(iter(test_dataloader))[0]
+    batch = next(iter(f.data))[0]
     resolution = 0 #setting this too low will cause the mutual information to be dominated by the noise, too high will cause the entropy to be apparently proportional to the size of the cluster
-    jac = torch.autograd.functional.jacobian(lambda x: tuple(t.sum(0).reshape(-1) for t in f(x)), testinput)
+    jac = torch.autograd.functional.jacobian(lambda x: tuple(t.sum(0).reshape(-1) for t in f(x)), batch)
     colors = [plt.cm.tab10(i/len(jac)) for i,j in enumerate(jac) for _ in range(j.shape[0])]
-    jac = torch.concat(jac).transpose(0,1) * 2**(resolution) #(1+np.log(2*np.pi))??
+    jac = torch.concat(jac).transpose(0,1) * 2**resolution #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
     
@@ -108,9 +92,10 @@ def condmutinf(f, shape):
         #t.__repr__ = lambda: f'{t.index}'
         return t
     
-    class Pair(set):
+    class Cluster(set):
         def reify(self):
             self.jac = torch.concat([c.jac for c in self],1)
+            self.indices = [i for c in self for i in c]
             self.entr = entr(self)
             self.mutinf = mutinf(self)
             self.reify = lambda: True
@@ -125,7 +110,7 @@ def condmutinf(f, shape):
     
     @functools.cache
     def cachedset(a,b):
-        return Pair((a,b))
+        return Cluster((a,b))
 
     leaves = jac.unsqueeze(1).unbind(2)
     clusters = set([iplusplus(t) for t in leaves])
@@ -169,11 +154,19 @@ def condmutinf(f, shape):
         plt.plot(10*(i+0.5), leaves[l].entr, "o", color=colors[leaves[l].index])
     plt.savefig("dendrogram.jpg")
     plt.show()
-#condmutinf(adder, (1,2,2))
 
-weights = diskcache(lambda: torchexample.train_network().state_dict())()
-model = torchexample.NeuralNetwork()
-model.load_state_dict(weights)
+    embed = {x:y for batch in f.data for x,y in zip(batch,torch.index_select(f(batch),1,torch.tensor(a.indices)))}
+    from sklearn.manifold import TSNE
+    embed2 = TSNE(verbose=1).fit_transform(torch.cat(embed.values()))
+    plt.scatter(embed2)
+    plt.savefig("tsne.jpg")
+    plt.show()
+    
+if False:
+    f = adder
+    # make a dataset that is just random tensors from torch.rand((1,2,2))
+    adder.data = torch.TensorDataset(torch.rand((40,1,2,2)))
+    condmutinf(f)
 
 def nested(*args): #why was nested deprecated??
     class Nested:
@@ -192,9 +185,9 @@ def forward_all(model, input):
     return tuple(all_tensors)
 
 with torch.no_grad():
-    condmutinf(lambda i: forward_all(model, i), (1, 28*28))
-#from line_profiler import LineProfiler
-
-#make dendrogram work
-#optimize heap thing further
-#write actual agenda code
+    weights = diskcache(lambda: torchexample.train_network().state_dict())()
+    model = torchexample.NeuralNetwork()
+    model.load_state_dict(weights)
+    f = functools.partial(forward_all,model)
+    f.data = datasets.MNIST(root="data",train=False,download=True,transform=ToTensor())
+    condmutinf(f)
