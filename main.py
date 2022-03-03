@@ -90,13 +90,15 @@ def condmutinf(f, shape):
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
     
+    pi_i = np.pi*1j
     def lse(*args): #torch.Tensor.lse = lse
         t = torch.stack(args)
         tmax = max(t.real)
         return t.subtract(tmax).exp().sum().log().add(tmax)
     entr = lambda c: torch.linalg.svdvals(c.jac).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
-    mutinf = lambda c: sum(d.entr for d in c) -2*c.entr #-c.entr #/c.entr
-    bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+np.pi*1j).real # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
+    #mutinf = lambda c: lse(sum(d.entr for d in c) ,c.entr+pi_i).real #-c.entr #/c.entr
+    mutinf = lambda c: lse(*(d.entr for d in c) ,c.entr+pi_i).real #-c.entr #/c.entr
+    bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+pi_i).real # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
 
     count = 0   
     def iplusplus(t):
@@ -185,7 +187,7 @@ def forward_all(model, input):
     def hook(layer):
         h = layer.register_forward_hook(lambda module, input, output: all_tensors.append(output))
         return contextlib.closing(Object(close = lambda: h.remove()))
-    with nested(*[hook(m) for m in model[2:] if isinstance(m, torch.nn.Linear)]):
+    with nested(*[hook(m) for m in model[2:] if isinstance(m, torch.nn.Linear)]):#model.modules()
         model(input)
     return tuple(all_tensors)
 
