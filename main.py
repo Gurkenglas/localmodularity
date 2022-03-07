@@ -20,7 +20,7 @@ import scipy
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
 torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
 torch.set_default_dtype(torch.float64)
-eye_like = lambda t: torch.eye(t.shape[-1])
+torch.Tensor.eye_like = lambda t: torch.eye(t.shape[-1]).expand_as(t)
 Object = lambda **kwargs: type("Object", (), kwargs) # Anonymous objects! :)
 import varname
 sprint = lambda *args: [print(varname.nameof(a,frame=3,vars_only=False), a) for a in args]
@@ -74,7 +74,24 @@ def condmutinf(f):
     jac = torch.concat(jac).transpose(0,1) * 2**resolution #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
-    
+    fig, axes = plt.subplots(5,10,figsize=(20,20), sharex=True, sharey=True)
+    #outputsvds = torch.linalg.svd(jac[:,-522:])
+    #outputkernel = outputsvds[2][:,522:] #shape 28²-10,28².
+    #identity = outputkernel @ outputkernel.transpose(1,2)
+    #torch.testing.assert_close(identity, identity.eye_like())
+    #projecttokernel = outputkernel.transpose(1,2) @ outputkernel
+    #conditioned = jac[:,:] @ projecttokernel
+    #svds = torch.linalg.svd(conditioned)
+    svds = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]))
+    for i in range(5):
+        point = batch[i,0]
+        for j in range(10):
+            vector = svds[2][i,j,0]
+            length = torch.max(vector.abs())
+            axes[i,j].imshow(point, cmap='gray')
+            axes[i,j].imshow(((vector/length).nan_to_num(0).reshape_as(point)+1)/2, cmap='plasma', alpha=0.5)
+            axes[i,j].set_title(f'{length:.2f},{svds[1][i,j,0]:.2f}')
+    plt.show()
     pi_i = np.pi*1j
     def lse(*args): #torch.Tensor.lse = lse
         t = torch.stack(args)
@@ -198,7 +215,7 @@ def forward_all(model, input):
     def hook(layer):
         h = layer.register_forward_hook(lambda module, input, output: all_tensors.append(output))
         return contextlib.closing(Object(close = lambda: h.remove()))
-    with nested(*[hook(m) for m in model[2:] if isinstance(m, torch.nn.Linear)]):#model.modules()
+    with nested(*[hook(m) for m in model if isinstance(m, torch.nn.Linear)]):#model.modules()
         model(input)
     return tuple(all_tensors)
 
@@ -207,5 +224,5 @@ with torch.no_grad():
     model = torchexample.NeuralNetwork()
     model.load_state_dict(weights)
     f = functools.partial(forward_all,model)
-    f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=1)))
+    f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=5)))
     condmutinf(f)
