@@ -83,14 +83,18 @@ def condmutinf(f):
     #conditioned = jac[:,:] @ projecttokernel
     #svds = torch.linalg.svd(conditioned)
     svds = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]))
+    right = jac.mean(0)
+    row0 = jac[0,0:1]
+    row0svd = torch.linalg.svd(row0)
+    row0svdv = row0svd[2][0]
+    torch.testing.assert_close(row0svdv, row0[0]/row0.norm())
     for i in range(5):
-        point = batch[i,0]
         for j in range(10):
-            vector = svds[2][i,j,0]
-            length = torch.max(vector.abs())
-            axes[i,j].imshow(point, cmap='gray')
-            axes[i,j].imshow(((vector/length).nan_to_num(0).reshape_as(point)+1)/2, cmap='plasma', alpha=0.5)
-            axes[i,j].set_title(f'{length:.2f},{svds[1][i,j,0]:.2f}')
+            vector = jac[i,j]
+            m = torch.max(vector.abs())
+            axes[i,j].imshow(batch[i].reshape(28,28), cmap='gray')
+            axes[i,j].imshow(((vector/m).nan_to_num(0).reshape(28,28)+1)/2, cmap='plasma', alpha=0.5)
+            axes[i,j].set_title(f'{m:.2f},{svds[1][i,j]}')
     plt.show()
     pi_i = np.pi*1j
     def lse(*args): #torch.Tensor.lse = lse
@@ -224,5 +228,5 @@ with torch.no_grad():
     model = torchexample.NeuralNetwork()
     model.load_state_dict(weights)
     f = functools.partial(forward_all,model)
-    f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=5)))
+    f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=20)))
     condmutinf(f)
