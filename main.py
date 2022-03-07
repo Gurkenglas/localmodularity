@@ -15,6 +15,7 @@ import heapq
 from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision.transforms import ToTensor
+import scipy
 #torch.Tensor.repr = lambda self: self.shape.repr()
 torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
 torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
@@ -66,7 +67,7 @@ def printallnondiagonalbigs(corr, threshold):
 
 def condmutinf(f):
     "Calculate the conditional mutual information between the two groups conditional on the input plus noise. First shape is batchsize."
-    batch = next(iter(f.data))[0]
+    batch = f.data[0]
     resolution = 0 #setting this too low will cause the mutual information to be dominated by the noise, too high will cause the entropy to be apparently proportional to the size of the cluster
     jac = torch.autograd.functional.jacobian(lambda x: tuple(t.sum(0).reshape(-1) for t in f(x)), batch)
     colors = [plt.cm.tab10(i/len(jac)) for i,j in enumerate(jac) for _ in range(j.shape[0])]
@@ -84,18 +85,20 @@ def condmutinf(f):
     mutinf = lambda c: lse(*(d.entr for d in c) ,c.entr+pi_i).real #-c.entr #/c.entr
     bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+pi_i).real # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
 
+    clusterlist = []
     count = 0   
     def iplusplus(t):
         nonlocal count
         t.index = count
         count += 1
+        clusterlist.append(t)
         #t.__repr__ = lambda: f'{t.index}'
         return t
     
     class Cluster(set):
         def reify(self):
             self.jac = torch.concat([c.jac for c in self],1)
-            self.indices = [i for c in self for i in c]
+            self.indices = [i for c in self for i in c.indices]
             self.entr = entr(self)
             self.mutinf = mutinf(self)
             self.reify = lambda: True
@@ -118,6 +121,7 @@ def condmutinf(f):
         l.jac = l
         l.__hash__ = lambda: l.index
         l.entr = entr(l)
+        l.indices = [l.index]
     linkage = []
     heap = [cachedpair(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
     [pair.reify() for pair in tqdm(heap)]
@@ -155,18 +159,32 @@ def condmutinf(f):
     plt.savefig("dendrogram.jpg")
     plt.show()
 
-    embed = {x:y for batch in f.data for x,y in zip(batch,torch.index_select(f(batch),1,torch.tensor(a.indices)))}
-    from sklearn.manifold import TSNE
-    embed2 = TSNE(verbose=1).fit_transform(torch.cat(embed.values()))
-    plt.scatter(embed2)
-    plt.savefig("tsne.jpg")
-    plt.show()
+    plt.figure()
+    batch = torch.concat(f.data,0)
+    activations = torch.concat([t.reshape(t.shape[0],-1) for t in f(batch)],1) # 10000,522
+
+    #find two images with big difference on the one child cluster and small difference on the other child cluster, and vice versa.
+    def illustrate(ab, name):
+        if isinstance(ab, torch.Tensor):
+            acts = activations[:,ab.index]
+            acts = acts.expand(acts.shape[0],acts.shape[0])
+            return (acts-acts.T).pow(2)
+        a,b = ab
+        adists, bdists = illustrate(a, name + "a"), illustrate(b, name + "b")
+        versus = adists-bdists
+        min, max = torch.argmin(versus), torch.argmax(versus)
+        minimage = torch.cat([batch[min//batch.shape[0]], batch[min%batch.shape[0]]],1)
+        maximage = torch.cat([batch[max//batch.shape[0]], batch[max%batch.shape[0]]],1)
+        illustrations = torch.cat([minimage, maximage],2)[0]
+        plt.imshow(illustrations.numpy())
+        plt.savefig("illustrations/" + name + ".jpg")
+        return adists+bdists
     
+    illustrate(ab, "_")
+
 if False:
-    f = adder
-    # make a dataset that is just random tensors from torch.rand((1,2,2))
-    adder.data = torch.TensorDataset(torch.rand((40,1,2,2)))
-    condmutinf(f)
+    adder.data = torch.rand((40,1,2,2))
+    condmutinf(adder)
 
 def nested(*args): #why was nested deprecated??
     class Nested:
@@ -189,5 +207,5 @@ with torch.no_grad():
     model = torchexample.NeuralNetwork()
     model.load_state_dict(weights)
     f = functools.partial(forward_all,model)
-    f.data = datasets.MNIST(root="data",train=False,download=True,transform=ToTensor())
+    f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=1)))
     condmutinf(f)
