@@ -82,23 +82,31 @@ def condmutinf(f):
     #conditioned = jac[:,:] @ projecttokernel
     #svds = torch.linalg.svd(conditioned)
     
-    svds = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
     #can modulesize be heterogenous?
     #ohh left singular matrix block diagonal?
     #right singular vectors represent axes, means interact badly with this
-    fig, axes = plt.subplots(10,5,figsize=(20,20), sharex=True, sharey=True) # batchprefix, modulecount
-    u,d,v = (torch.stack([x[:i+1].mean(0) for i in range(len(x))], 0) for x in svds) #batchprefix, modulecount, modulesize=1, inputsize
-    for row,moduleu,moduled,modulev in tqdm(zip(axes,u,d,v)): #modulecount, modulesize=1, inputsize
-        for cell,leftsingularvector,singularvalue,rightsingularvector in zip(row,moduleu,moduled,modulev): #modulesize=1, inputsize
-            cell.imshow(rightsingularvector[0].reshape(28,28), cmap='plasma')
-            cell.set_title(f'{singularvalue[0]:.2f}')
+    u,d,v = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
     #fig, axes = plt.subplots(10,2,figsize=(20,20), sharex=True, sharey=True) # modulecount, modulesize
-    #u,d,v = (x.mean(0) for x in svds) #modulecount, modulesize, inputsize
+    #u,d,v = (x.mean(0) for x in (u,d,v)) #modulecount, modulesize, inputsize
     #for row,moduleu,moduled,modulev in tqdm(zip(axes,u,d,v)): #modulesize, inputsize
     #    for cell,leftsingularvector,singularvalue,rightsingularvector in zip(row,moduleu,moduled,modulev): #inputsize
     #        cell.imshow(rightsingularvector.reshape(28,28), cmap='plasma')
     #        cell.set_title(f'{singularvalue:.2f}')
+    fig, axes = plt.subplots(20,5,figsize=(20,20), sharex=True, sharey=True) # 2*batchprefix, modulecount
+    u,d,v = (torch.stack([x[:i+1].mean(0) for i in range(len(x))], 0) for x in (u,d,v)) #batchprefix, modulecount, modulesize=1, inputsize
+    for row,moduleu,moduled,modulev in tqdm(zip(axes[0:10],u,d,v)): #modulecount, modulesize=1, inputsize
+        for cell,leftsingularvector,singularvalue,rightsingularvector in zip(row,moduleu,moduled,modulev): #modulesize=1, inputsize
+            cell.imshow(rightsingularvector[0].reshape(28,28), cmap='plasma')
+            cell.set_title(f'{singularvalue[0]:.2f}')
+    u,d,v = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
+    v = v * torch.einsum("bcsi,bcsi -> bcs", v, v[:1].expand_as(v)).sign()
+    u,d,v = (torch.stack([x[:i+1].mean(0) for i in range(len(x))], 0) for x in (u,d,v)) #batchprefix, modulecount, modulesize=1, inputsize
+    for row,moduleu,moduled,modulev in tqdm(zip(axes[10:],u,d,v)): #modulecount, modulesize=1, inputsize
+        for cell,leftsingularvector,singularvalue,rightsingularvector in zip(row,moduleu,moduled,modulev): #modulesize=1, inputsize
+            cell.imshow(rightsingularvector[0].reshape(28,28), cmap='plasma')
+            cell.set_title(f'{singularvalue[0]:.2f}')
     plt.show()
+    u,d,v = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
     pi_i = np.pi*1j
     def lse(*args): #torch.Tensor.lse = lse
         t = torch.stack(args)
