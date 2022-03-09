@@ -74,7 +74,6 @@ def condmutinf(f):
     jac = torch.concat(jac).transpose(0,1) * 2**resolution #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
-    fig, axes = plt.subplots(5,10,figsize=(20,20), sharex=True, sharey=True)
     #outputsvds = torch.linalg.svd(jac[:,-522:])
     #outputkernel = outputsvds[2][:,522:] #shape 28²-10,28².
     #identity = outputkernel @ outputkernel.transpose(1,2)
@@ -82,19 +81,23 @@ def condmutinf(f):
     #projecttokernel = outputkernel.transpose(1,2) @ outputkernel
     #conditioned = jac[:,:] @ projecttokernel
     #svds = torch.linalg.svd(conditioned)
-    svds = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]))
-    right = jac.mean(0)
-    row0 = jac[0,0:1]
-    row0svd = torch.linalg.svd(row0)
-    row0svdv = row0svd[2][0]
-    torch.testing.assert_close(row0svdv, row0[0]/row0.norm())
-    for i in range(5):
-        for j in range(10):
-            vector = jac[i,j]
-            m = torch.max(vector.abs())
-            axes[i,j].imshow(batch[i].reshape(28,28), cmap='gray')
-            axes[i,j].imshow(((vector/m).nan_to_num(0).reshape(28,28)+1)/2, cmap='plasma', alpha=0.5)
-            axes[i,j].set_title(f'{m:.2f},{svds[1][i,j]}')
+    
+    svds = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
+    #can modulesize be heterogenous?
+    #ohh left singular matrix block diagonal?
+    #right singular vectors represent axes, means interact badly with this
+    fig, axes = plt.subplots(10,5,figsize=(20,20), sharex=True, sharey=True) # batchprefix, modulecount
+    u,d,v = (torch.stack([x[:i+1].mean(0) for i in range(len(x))], 0) for x in svds) #batchprefix, modulecount, modulesize=1, inputsize
+    for row,moduleu,moduled,modulev in tqdm(zip(axes,u,d,v)): #modulecount, modulesize=1, inputsize
+        for cell,leftsingularvector,singularvalue,rightsingularvector in zip(row,moduleu,moduled,modulev): #modulesize=1, inputsize
+            cell.imshow(rightsingularvector[0].reshape(28,28), cmap='plasma')
+            cell.set_title(f'{singularvalue[0]:.2f}')
+    #fig, axes = plt.subplots(10,2,figsize=(20,20), sharex=True, sharey=True) # modulecount, modulesize
+    #u,d,v = (x.mean(0) for x in svds) #modulecount, modulesize, inputsize
+    #for row,moduleu,moduled,modulev in tqdm(zip(axes,u,d,v)): #modulesize, inputsize
+    #    for cell,leftsingularvector,singularvalue,rightsingularvector in zip(row,moduleu,moduled,modulev): #inputsize
+    #        cell.imshow(rightsingularvector.reshape(28,28), cmap='plasma')
+    #        cell.set_title(f'{singularvalue:.2f}')
     plt.show()
     pi_i = np.pi*1j
     def lse(*args): #torch.Tensor.lse = lse
@@ -228,5 +231,5 @@ with torch.no_grad():
     model = torchexample.NeuralNetwork()
     model.load_state_dict(weights)
     f = functools.partial(forward_all,model)
-    f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=20)))
+    f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=10)))
     condmutinf(f)
