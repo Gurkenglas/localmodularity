@@ -67,20 +67,18 @@ def condmutinf(f):
     #identity = outputkernel @ outputkernel.transpose(1,2)
     #torch.testing.assert_close(identity, identity.eye_like())
     #projecttokernel = outputkernel.transpose(1,2) @ outputkernel
-    #conditioned = jac[:,:] @ projecttokernel
+    #conditioned = jac @ projecttokernel
     #svds = torch.linalg.svd(conditioned)
-    
     #can modulesize be heterogenous?
     #ohh left singular matrix block diagonal?
     #right singular vectors represent axes, means interact badly with this
-    u,d,v = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
-    fig, axes = plt.subplots(3,10,figsize=(20,20), sharex=True, sharey=True) # 2*batchprefix, modulecount
-    for i,cell in enumerate(axes[0]):
-        cell.imshow((v[:,0,0]*v[0,0,0]).nan_to_num(0)[i].reshape(28,28), cmap='plasma')
-    for i,cell in enumerate(axes[1]):
-        cell.imshow((v[:,0,0] * (v[:,0,0]*v[0,0,0]).sum(1,keepdim=True).sign())[i].reshape(28,28), cmap='plasma')
-    for i,cell in enumerate(axes[2]):
-        cell.imshow((v[:,0,0] * (v[:,0,0]*v[0,0,0]).sum(1,keepdim=True).sign())[:i+1].mean(0).reshape(28,28), cmap='plasma')
+    u,d,v = torch.linalg.svd(jac[:,:10].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
+    fig, axes = plt.subplots(5,10,figsize=(20,20), sharex=True, sharey=True) #batchsize, modulecount
+    #v = v[0].expand_as(v).mul(v).sum(1,keepdim=True).sign().mul(v).mean(0) #modulesize, inputsize
+    for row,image,imagev in zip(axes, batch, v):
+        for cell,modulev in zip(row,imagev):
+            cell.imshow(image.reshape(28,28), cmap = plt.cm.gray)
+            cell.imshow(modulev[0].reshape(28,28), cmap='plasma', alpha=0.8, vmin=-.05, vmax=.05)
     plt.show()
     pi_i = np.pi*1j
     def lse(*args): #torch.Tensor.lse = lse
@@ -93,7 +91,7 @@ def condmutinf(f):
     bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+pi_i).real # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
 
     clusterlist = []
-    count = 0   
+    count = 0
     def iplusplus(t):
         nonlocal count
         t.index = count
@@ -122,7 +120,7 @@ def condmutinf(f):
     def cachedset(a,b):
         return Cluster((a,b))
 
-    leaves = jac.unsqueeze(1).unbind(2)
+    leaves = jac[:,-10:].unsqueeze(1).unbind(2)
     clusters = set([iplusplus(t) for t in leaves])
     for l in leaves:
         l.jac = l
@@ -209,7 +207,7 @@ def forward_all(model, input):
         model(input)
     return tuple(all_tensors)
 
+f = functools.partial(forward_all,torchexample.get_network())
 with torch.no_grad():
-    f = functools.partial(forward_all,torchexample.get_network())
     f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=10)))
     condmutinf(f)

@@ -11,12 +11,12 @@ import os
 device='cpu'
 #device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-def train(model):
+def train(model, epochs=9, batchsize=0):
     dataset = datasets.MNIST #datasets.FashionMNIST
     train_dataloader,test_dataloader = (
-        DataLoader(dataset(root="data",train=b,download=True,transform=ToTensor()),batch_size=1000) for b in (True, False))
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
-    for t in range(10):
+        DataLoader(dataset(root="data",train=b,download=True,transform=ToTensor()),batch_size=batchsize) for b in (True, False))
+    optimizer = torch.optim.Adam(model.parameters())
+    for t in range(epochs):
         print(f"Epoch {t+1}\n-------------------------------")
         for X, y in tqdm(train_dataloader):
             pred = model(X.to(device))
@@ -30,8 +30,7 @@ def train(model):
                 pred = model(X.to(device))
                 test_loss += nn.CrossEntropyLoss()(pred, y.to(device)).item()
                 correct += (pred.argmax(1) == y.to(device)).type(torch.float).sum().item()
-        test_loss /= test_dataloader.__len__()
-        print(f"Test Error: \n Correct: {correct}, Avg loss: {test_loss:>8f} \n")
+        print(f"Test Error: \n Accuracy: {correct/test_dataloader.__len__()/batchsize}, Avg loss: {test_loss/test_dataloader.__len__():>8f} \n")
     return model
 
 def get_network():
@@ -44,7 +43,7 @@ def get_network():
         nn.ReLU(),
         nn.Linear(512, 10)
         ).to(device)
-    weights = diskcache(lambda: train(model).state_dict())()
+    weights = diskcache(lambda: train(model, epochs=9, batchsize=1000).state_dict())()
     model.load_state_dict(weights)
     return model
 
