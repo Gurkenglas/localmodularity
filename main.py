@@ -25,18 +25,6 @@ Object = lambda **kwargs: type("Object", (), kwargs) # Anonymous objects! :)
 import varname
 sprint = lambda *args: [print(varname.nameof(a,frame=3,vars_only=False), a) for a in args]
 
-def diskcache(f):
-    "Doesn't check args, only caches tensors."
-    @functools.wraps(f)
-    def wrapper(*args, **kwargs):
-        name = varname.varname()
-        filepath = name+'.pt'
-        if os.path.exists(filepath): return torch.load(filepath)
-        result = f(*args, **kwargs)
-        torch.save(result, filepath)
-        return result
-    return wrapper
-
 halfadder = lambda a,b: (a*b, (1-a)*b+(1-b)*a)
 def adder(ins):
     ins = ins.permute(1,2,0)
@@ -86,27 +74,14 @@ def condmutinf(f):
     #ohh left singular matrix block diagonal?
     #right singular vectors represent axes, means interact badly with this
     u,d,v = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
-    #fig, axes = plt.subplots(10,2,figsize=(20,20), sharex=True, sharey=True) # modulecount, modulesize
-    #u,d,v = (x.mean(0) for x in (u,d,v)) #modulecount, modulesize, inputsize
-    #for row,moduleu,moduled,modulev in tqdm(zip(axes,u,d,v)): #modulesize, inputsize
-    #    for cell,leftsingularvector,singularvalue,rightsingularvector in zip(row,moduleu,moduled,modulev): #inputsize
-    #        cell.imshow(rightsingularvector.reshape(28,28), cmap='plasma')
-    #        cell.set_title(f'{singularvalue:.2f}')
-    fig, axes = plt.subplots(20,5,figsize=(20,20), sharex=True, sharey=True) # 2*batchprefix, modulecount
-    u,d,v = (torch.stack([x[:i+1].mean(0) for i in range(len(x))], 0) for x in (u,d,v)) #batchprefix, modulecount, modulesize=1, inputsize
-    for row,moduleu,moduled,modulev in tqdm(zip(axes[0:10],u,d,v)): #modulecount, modulesize=1, inputsize
-        for cell,leftsingularvector,singularvalue,rightsingularvector in zip(row,moduleu,moduled,modulev): #modulesize=1, inputsize
-            cell.imshow(rightsingularvector[0].reshape(28,28), cmap='plasma')
-            cell.set_title(f'{singularvalue[0]:.2f}')
-    u,d,v = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
-    v = v * torch.einsum("bcsi,bcsi -> bcs", v, v[:1].expand_as(v)).sign()
-    u,d,v = (torch.stack([x[:i+1].mean(0) for i in range(len(x))], 0) for x in (u,d,v)) #batchprefix, modulecount, modulesize=1, inputsize
-    for row,moduleu,moduled,modulev in tqdm(zip(axes[10:],u,d,v)): #modulecount, modulesize=1, inputsize
-        for cell,leftsingularvector,singularvalue,rightsingularvector in zip(row,moduleu,moduled,modulev): #modulesize=1, inputsize
-            cell.imshow(rightsingularvector[0].reshape(28,28), cmap='plasma')
-            cell.set_title(f'{singularvalue[0]:.2f}')
+    fig, axes = plt.subplots(3,10,figsize=(20,20), sharex=True, sharey=True) # 2*batchprefix, modulecount
+    for i,cell in enumerate(axes[0]):
+        cell.imshow((v[:,0,0]*v[0,0,0]).nan_to_num(0)[i].reshape(28,28), cmap='plasma')
+    for i,cell in enumerate(axes[1]):
+        cell.imshow((v[:,0,0] * (v[:,0,0]*v[0,0,0]).sum(1,keepdim=True).sign())[i].reshape(28,28), cmap='plasma')
+    for i,cell in enumerate(axes[2]):
+        cell.imshow((v[:,0,0] * (v[:,0,0]*v[0,0,0]).sum(1,keepdim=True).sign())[:i+1].mean(0).reshape(28,28), cmap='plasma')
     plt.show()
-    u,d,v = torch.linalg.svd(jac[:,-10:].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
     pi_i = np.pi*1j
     def lse(*args): #torch.Tensor.lse = lse
         t = torch.stack(args)
@@ -235,9 +210,6 @@ def forward_all(model, input):
     return tuple(all_tensors)
 
 with torch.no_grad():
-    weights = diskcache(lambda: torchexample.train_network().state_dict())()
-    model = torchexample.NeuralNetwork()
-    model.load_state_dict(weights)
-    f = functools.partial(forward_all,model)
+    f = functools.partial(forward_all,torchexample.get_network())
     f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=10)))
     condmutinf(f)
