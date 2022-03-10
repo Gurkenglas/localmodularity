@@ -16,8 +16,9 @@ from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision.transforms import ToTensor
 import scipy
+torch.Tensor.svd = lambda self, *args, **kwargs: torch.linalg.svd(self, *args, **kwargs)
 #torch.Tensor.repr = lambda self: self.shape.repr()
-torch.Tensor.einsum = lambda self, *args, kwargs: torch.einsum(args[0], self, *args[1:], kwargs)
+torch.Tensor.einsum = lambda self, *args, **kwargs: torch.einsum(args[0], self, *args[1:], **kwargs)
 torch.Tensor.svdvals = lambda self: torch.linalg.svdvals(self)
 torch.set_default_dtype(torch.float64)
 torch.Tensor.eye_like = lambda t: torch.eye(t.shape[-1]).expand_as(t)
@@ -62,33 +63,13 @@ def condmutinf(f):
     jac = torch.concat(jac).transpose(0,1) * 2**resolution #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
-    #outputsvds = torch.linalg.svd(jac[:,-522:])
-    #outputkernel = outputsvds[2][:,522:] #shape 28²-10,28².
-    #identity = outputkernel @ outputkernel.transpose(1,2)
-    #torch.testing.assert_close(identity, identity.eye_like())
-    #projecttokernel = outputkernel.transpose(1,2) @ outputkernel
-    #conditioned = jac @ projecttokernel
-    #svds = torch.linalg.svd(conditioned)
-    #can modulesize be heterogenous?
-    #ohh left singular matrix block diagonal?
-    #right singular vectors represent axes, means interact badly with this
-    u,d,v = torch.linalg.svd(jac[:,:10].reshape(jac.shape[0],10,1,jac.shape[-1]), full_matrices = False) #batchsize, modulecount, modulesize=1, inputsize
-    fig, axes = plt.subplots(5,10,figsize=(20,20), sharex=True, sharey=True) #batchsize, modulecount
-    #v = v[0].expand_as(v).mul(v).sum(1,keepdim=True).sign().mul(v).mean(0) #modulesize, inputsize
-    for row,image,imagev in zip(axes, batch, v):
-        for cell,modulev in zip(row,imagev):
-            cell.imshow(image.reshape(28,28), cmap = plt.cm.gray)
-            cell.imshow(modulev[0].reshape(28,28), cmap='plasma', alpha=0.8, vmin=-.05, vmax=.05)
-    plt.show()
     pi_i = np.pi*1j
     def lse(*args): #torch.Tensor.lse = lse
         t = torch.stack(args)
-        tmax = max(t.real)
+        tmax = t.real.max(0)
         return t.subtract(tmax).exp().sum().log().add(tmax)
     entr = lambda c: torch.linalg.svdvals(c.jac).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
-    #mutinf = lambda c: lse(sum(d.entr for d in c) ,c.entr+pi_i).real #-c.entr #/c.entr
-    mutinf = lambda c: lse(*(d.entr for d in c) ,c.entr+pi_i).real #-c.entr #/c.entr
-    bound = lambda ac,bc,c: lse(ac.entr,bc.entr,c.entr+pi_i).real # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
+    mutinf = lambda c: sum(d.entr for d in c)-2*c.entr
 
     clusterlist = []
     count = 0
@@ -104,7 +85,7 @@ def condmutinf(f):
         def reify(self):
             self.jac = torch.concat([c.jac for c in self],1)
             self.indices = [i for c in self for i in c.indices]
-            self.entr = entr(self)
+            self.entr = self.exactentr = entr(self)
             self.mutinf = mutinf(self)
             self.reify = lambda: True
             return False
@@ -148,44 +129,29 @@ def condmutinf(f):
         iplusplus(ab)
         a.jac = b.jac = None
         linkage.append([a.index, b.index, ab.entr, ab.jac.shape[1]])
-        for c in clusters:
-            abc,ac,bc = cachedpair(ab,c),cachedpair(a,c),cachedpair(b,c)
-            assert isinstance(c,torch.Tensor) or c.reify()
-            abc.entr = max([bound(ac,bc,c),bound(ab,bc,b),bound(ac,ab,a)])
+
+        # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
+        bound = torch.stack([[a.entr, b.entr, c.exactentr, ab.entr, cachedpair(a,c).entr, cachedpair(b,c).entr] for c in clusters])
+        bound = torch.index_select(dim=1, index=torch.Tensor([[4,5,2],[3,5,1],[3,4,0]]), src=bound)
+        bmax = bound.max(2)
+        bound = bound.subtract(bmax).exp()
+        bound[2] *= -1
+        bound = bound.sum(2).log().add(bmax).max(1)
+
+        for c,onebound in zip(clusters,bound):
+            abc = cachedpair(ab,c)
+            abc.entr = onebound
             abc.mutinf = mutinf(abc)
             heapq.heappush(heap, abc)
         clusters.add(ab)
-
-    plt.figure()    
+    plt.figure()
     dn = hierarchy.dendrogram(linkage)
     leaflist = dn["leaves"]
     for i,l in enumerate(leaflist):
         plt.plot(10*(i+0.5), leaves[l].entr, "o", color=colors[leaves[l].index])
     plt.savefig("dendrogram.jpg")
     plt.show()
-
-    plt.figure()
-    batch = torch.concat(f.data,0)
-    activations = torch.concat([t.reshape(t.shape[0],-1) for t in f(batch)],1) # 10000,522
-
-    #find two images with big difference on the one child cluster and small difference on the other child cluster, and vice versa.
-    def illustrate(ab, name):
-        if isinstance(ab, torch.Tensor):
-            acts = activations[:,ab.index]
-            acts = acts.expand(acts.shape[0],acts.shape[0])
-            return (acts-acts.T).pow(2)
-        a,b = ab
-        adists, bdists = illustrate(a, name + "a"), illustrate(b, name + "b")
-        versus = adists-bdists
-        min, max = torch.argmin(versus), torch.argmax(versus)
-        minimage = torch.cat([batch[min//batch.shape[0]], batch[min%batch.shape[0]]],1)
-        maximage = torch.cat([batch[max//batch.shape[0]], batch[max%batch.shape[0]]],1)
-        illustrations = torch.cat([minimage, maximage],2)[0]
-        plt.imshow(illustrations.numpy())
-        plt.savefig("illustrations/" + name + ".jpg")
-        return adists+bdists
-    
-    illustrate(ab, "_")
+    akernel = jac[a.indices].svd()[2][a.indices.__len__():]
 
 if False:
     adder.data = torch.rand((40,1,2,2))
@@ -211,3 +177,5 @@ f = functools.partial(forward_all,torchexample.get_network())
 with torch.no_grad():
     f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=10)))
     condmutinf(f)
+
+#fetch a pretrained generative network
