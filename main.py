@@ -106,7 +106,7 @@ def condmutinf(f):
     for l in leaves:
         l.jac = l
         l.__hash__ = lambda: l.index
-        l.entr = entr(l)
+        l.entr = l.exactentr = entr(l)
         l.indices = [l.index]
     linkage = []
     heap = [cachedpair(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
@@ -131,12 +131,12 @@ def condmutinf(f):
         linkage.append([a.index, b.index, ab.entr, ab.jac.shape[1]])
 
         # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
-        bound = torch.stack([[a.entr, b.entr, c.exactentr, ab.entr, cachedpair(a,c).entr, cachedpair(b,c).entr] for c in clusters])
-        bound = torch.index_select(dim=1, index=torch.Tensor([[4,5,2],[3,5,1],[3,4,0]]), src=bound)
-        bmax = bound.max(2)
+        bound = torch.tensor([[a.entr, b.entr, c.exactentr, ab.entr, cachedpair(a,c).entr, cachedpair(b,c).entr] for c in clusters])
+        bound = torch.index_select(bound, dim=1, index=torch.tensor([4,5,2,3,5,1,3,4,0])).reshape(-1,3,3)
+        bmax = bound.max(2,keepdim=True)[0]
         bound = bound.subtract(bmax).exp()
         bound[2] *= -1
-        bound = bound.sum(2).log().add(bmax).max(1)
+        bound = bound.sum(2).log().add(bmax[:,:,0]).max(1)[0]
 
         for c,onebound in zip(clusters,bound):
             abc = cachedpair(ab,c)
