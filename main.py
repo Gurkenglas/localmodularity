@@ -1,9 +1,6 @@
 import contextlib
 import functools
 import itertools
-from math import prod
-import os
-from typing import Callable
 import torch
 torch.set_printoptions(precision=3)
 import matplotlib.pyplot as plt
@@ -63,7 +60,6 @@ def condmutinf(f):
     jac = torch.concat(jac).transpose(0,1) * 2**resolution #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
-    pi_i = np.pi*1j
     def lse(*args): #torch.Tensor.lse = lse
         t = torch.stack(args)
         tmax = t.real.max(0)
@@ -101,7 +97,7 @@ def condmutinf(f):
     def cachedset(a,b):
         return Cluster((a,b))
 
-    leaves = jac[:,-10:].unsqueeze(1).unbind(2)
+    leaves = jac.unsqueeze(1).unbind(2)
     clusters = set([iplusplus(t) for t in leaves])
     for l in leaves:
         l.jac = l
@@ -132,10 +128,11 @@ def condmutinf(f):
 
         # det(A+B+C) >= det(A+C) + det(B+C) - det(C)
         bound = torch.tensor([[a.entr, b.entr, c.exactentr, ab.entr, cachedpair(a,c).entr, cachedpair(b,c).entr] for c in clusters])
+        if bound.shape == (0,): bound = torch.empty(0,f.data[0].shape[0],6)
         bound = torch.index_select(bound, dim=1, index=torch.tensor([4,5,2,3,5,1,3,4,0])).reshape(-1,3,3)
         bmax = bound.max(2,keepdim=True)[0]
         bound = bound.subtract(bmax).exp()
-        bound[2] *= -1
+        bound[:,:,2] *= -1
         bound = bound.sum(2).log().add(bmax[:,:,0]).max(1)[0]
 
         for c,onebound in zip(clusters,bound):
@@ -151,7 +148,6 @@ def condmutinf(f):
         plt.plot(10*(i+0.5), leaves[l].entr, "o", color=colors[leaves[l].index])
     plt.savefig("dendrogram.jpg")
     plt.show()
-    akernel = jac[a.indices].svd()[2][a.indices.__len__():]
 
 if False:
     adder.data = torch.rand((40,1,2,2))
@@ -173,9 +169,18 @@ def forward_all(model, input):
         model(input)
     return tuple(all_tensors)
 
-f = functools.partial(forward_all,torchexample.get_network())
-with torch.no_grad():
-    f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=10)))
-    condmutinf(f)
+#f = functools.partial(forward_all,torchexample.get_network())
+#with torch.no_grad():
+    #f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=1)))
+    #condmutinf(f)
 
-#fetch a pretrained generative network
+# we are getting garbage out of our network analysis. maybe try with a pretrained generative network?
+# no, let's do some simple convolutions for edge detection and treat that as the network to analyze.
+
+edgedetector = torch.nn.Conv2d(1,1,2,padding=1)
+edgedetector.weight.data = torch.tensor([[[[1.,-1.],[1.,-1.]]]])
+sprint(edgedetector.bias.data)
+with torch.no_grad():
+    f = edgedetector
+    f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=1)))
+    condmutinf(f)
