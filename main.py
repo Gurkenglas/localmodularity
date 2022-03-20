@@ -3,7 +3,6 @@ import itertools
 import torch
 torch.set_printoptions(precision=3)
 import matplotlib.pyplot as plt
-import numpy as np
 from tqdm import tqdm
 from scipy.cluster import hierarchy
 import heapq
@@ -44,13 +43,6 @@ def iplusplus(t):
     #t.__repr__ = lambda: f'{t.index}'
     return t
 class Cluster(set):
-    def reify(self):
-        self.jac = torch.concat([c.jac for c in self],1)
-        self.indices = [i for c in self for i in c.indices]
-        self.entr = self.exactentr = entr(self)
-        self.mutinf = mutinf(self)
-        self.reify = lambda: True
-        return False
     __lt__ = lambda self,other: self.mutinf > other.mutinf #maxheap
     __repr__ = lambda self: f'({self[0].index},{self[1].index})'
     __hash__ = lambda self: self.index # invariant: not called before index exists
@@ -72,17 +64,23 @@ for l in leaves:
     l.indices = [l.index]
 linkage = []
 heap = [cachedpair(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
-[pair.reify() for pair in tqdm(heap)]
+for h in heap:
+    h.entr = 0
 heapq.heapify(heap)
 
 def heapgenerator(heap):
     while heap:
         p = heapq.heappop(heap)
         if any(c.jac is None for c in p): continue
-        currententr = p.entr
-        if p.reify(): yield p
+        if hasattr(p,'exactentr'):
+            yield p
         else:
-            assert currententr <= p.entr
+            p.jac = torch.concat([c.jac for c in p],1)
+            p.indices = [i for c in p for i in c.indices]
+            p.exactentr = entr(p)
+            p.mutinf = mutinf(p)
+            assert p.entr <= p.exactentr
+            p.entr = p.exactentr
             heapq.heappush(heap, p)
 
 for ab in tqdm(heapgenerator(heap)):
