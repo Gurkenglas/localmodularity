@@ -1,10 +1,8 @@
-import contextlib
 import functools
 import itertools
 import torch
 torch.set_printoptions(precision=3)
 import matplotlib.pyplot as plt
-import torchexample
 import numpy as np
 from tqdm import tqdm
 from scipy.cluster import hierarchy
@@ -12,7 +10,6 @@ import heapq
 from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision.transforms import ToTensor
-import scipy
 torch.Tensor.svd = lambda self, *args, **kwargs: torch.linalg.svd(self, *args, **kwargs)
 #torch.Tensor.repr = lambda self: self.shape.repr()
 torch.Tensor.einsum = lambda self, *args, **kwargs: torch.einsum(args[0], self, *args[1:], **kwargs)
@@ -23,34 +20,6 @@ Object = lambda **kwargs: type("Object", (), kwargs) # Anonymous objects! :)
 import varname
 sprint = lambda *args: [print(varname.nameof(a,frame=3,vars_only=False), a) for a in args]
 
-halfadder = lambda a,b: (a*b, (1-a)*b+(1-b)*a)
-def adder(ins):
-    ins = ins.permute(1,2,0)
-    sum = []
-    carry = 0
-    activations = []
-    for a,b in ins:
-        u,v = halfadder(a,b)
-        w,x = halfadder(v,carry)
-        carry= u+w
-        sum.append(x)
-        activations += [a,b,u,v,w,x, carry]
-    sum.append(carry)
-    return torch.stack(activations)
-
-def correlation_from_covariance(covariance): #cov = jac @ jac.transpose(1,2)
-    covariance = covariance[0] #throw away batches, this is only for debugging
-    v = np.sqrt(np.diag(covariance))
-    return (covariance / np.outer(v, v)).nan_to_num(0)
-
-def printallnondiagonalbigs(corr, threshold):
-    corrbigvalues = torch.where(torch.abs(corr) > threshold, 1., 0.)
-    corrbigindices = corrbigvalues.nonzero()
-    for i in range(corrbigindices.__len__()):
-        if corrbigindices[i,0] < corrbigindices[i,1]:
-            print(corrbigindices[i]) 
-            print(corr[corrbigindices[i,0], corrbigindices[i,1]])
-
 def condmutinf(f):
     "Calculate the conditional mutual information between the two groups conditional on the input plus noise. First shape is batchsize."
     batch = f.data[0]
@@ -60,10 +29,6 @@ def condmutinf(f):
     jac = torch.concat(jac).transpose(0,1) * 2**resolution #(1+np.log(2*np.pi))??
     jac = jac.reshape(*jac.shape[0:2], -1)
     sprint(jac.shape)
-    def lse(*args): #torch.Tensor.lse = lse
-        t = torch.stack(args)
-        tmax = t.real.max(0)
-        return t.subtract(tmax).exp().sum().log().add(tmax)
     entr = lambda c: torch.linalg.svdvals(c.jac).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
     mutinf = lambda c: sum(d.entr for d in c)-2*c.entr
 
@@ -97,7 +62,7 @@ def condmutinf(f):
     def cachedset(a,b):
         return Cluster((a,b))
 
-    leaves = jac.unsqueeze(1).unbind(2)
+    leaves = jac[:,:29*8].unsqueeze(1).unbind(2)
     clusters = set([iplusplus(t) for t in leaves])
     for l in leaves:
         l.jac = l
@@ -142,6 +107,18 @@ def condmutinf(f):
             heapq.heappush(heap, abc)
         clusters.add(ab)
     plt.figure()
+    image = torch.zeros(29*8)
+    def color(ab,strength):
+        if isinstance(ab, torch.Tensor): return
+        a,b = ab
+        for i in b.indices:
+            image[i] += strength
+        color(a,strength/2)
+        color(b,strength/2)
+    color(ab,1.)
+    plt.imshow(image.reshape(-1,29), cmap='gray')
+    plt.show()
+    plt.figure()
     dn = hierarchy.dendrogram(linkage)
     leaflist = dn["leaves"]
     for i,l in enumerate(leaflist):
@@ -149,37 +126,9 @@ def condmutinf(f):
     plt.savefig("dendrogram.jpg")
     plt.show()
 
-if False:
-    adder.data = torch.rand((40,1,2,2))
-    condmutinf(adder)
-
-def nested(*args): #why was nested deprecated??
-    class Nested:
-        def __enter__(self): [a.__enter__() for a in args]
-        def __exit__(self,*exc): [a.__exit__() for a in args]
-    return Nested()
-
-# wrap a model to return all intermediate tensors
-def forward_all(model, input):
-    all_tensors = []#input]
-    def hook(layer):
-        h = layer.register_forward_hook(lambda module, input, output: all_tensors.append(output))
-        return contextlib.closing(Object(close = lambda: h.remove()))
-    with nested(*[hook(m) for m in model if isinstance(m, torch.nn.Linear)]):#model.modules()
-        model(input)
-    return tuple(all_tensors)
-
-#f = functools.partial(forward_all,torchexample.get_network())
-#with torch.no_grad():
-    #f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=1)))
-    #condmutinf(f)
-
-# we are getting garbage out of our network analysis. maybe try with a pretrained generative network?
-# no, let's do some simple convolutions for edge detection and treat that as the network to analyze.
-
 edgedetector = torch.nn.Conv2d(1,1,2,padding=1)
 edgedetector.weight.data = torch.tensor([[[[1.,-1.],[1.,-1.]]]])
-sprint(edgedetector.bias.data)
+edgedetector.bias.data = torch.tensor([0.])
 with torch.no_grad():
     f = edgedetector
     f.data = list(map(lambda xy:xy[0], DataLoader(datasets.MNIST(root="data",train=False,download=True,transform=ToTensor()),batch_size=1)))
