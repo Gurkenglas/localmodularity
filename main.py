@@ -37,6 +37,7 @@ mutinf = lambda c: sum(d.entr for d in c)-2*c.entr
 clusterlist = []
 count = 0
 def iplusplus(t):
+    global count
     t.index = count
     count += 1
     clusterlist.append(t)
@@ -62,27 +63,28 @@ for l in leaves:
     l.__hash__ = lambda: l.index
     l.entr = l.exactentr = entr(l)
     l.indices = [l.index]
-linkage = []
 heap = [cachedpair(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
-for h in heap:
-    h.entr = 0
+for ab in heap:
+    ab.entr = 0 # max(l.entr for l in ab)
+    ab.mutinf = torch.inf # sum(l.entr for l in ab)
 heapq.heapify(heap)
 
 def heapgenerator(heap):
     while heap:
-        p = heapq.heappop(heap)
-        if any(c.jac is None for c in p): continue
-        if hasattr(p,'exactentr'):
-            yield p
+        ab = heapq.heappop(heap)
+        if any(c.jac is None for c in ab): continue
+        if hasattr(ab,'exactentr'):
+            yield ab
         else:
-            p.jac = torch.concat([c.jac for c in p],1)
-            p.indices = [i for c in p for i in c.indices]
-            p.exactentr = entr(p)
-            p.mutinf = mutinf(p)
-            assert p.entr <= p.exactentr
-            p.entr = p.exactentr
-            heapq.heappush(heap, p)
+            ab.jac = torch.concat([c.jac for c in ab],1)
+            ab.indices = [i for c in ab for i in c.indices]
+            ab.exactentr = entr(ab.jac)
+            assert ab.entr <= ab.exactentr
+            ab.entr = ab.exactentr
+            ab.mutinf = mutinf(ab)
+            heapq.heappush(heap, ab)
 
+linkage = []
 for ab in tqdm(heapgenerator(heap)):
     a,b = ab # a and b are fungible
     clusters.remove(a), clusters.remove(b)
