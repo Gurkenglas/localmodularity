@@ -3,7 +3,6 @@ import itertools
 import torch
 torch.set_printoptions(precision=3)
 import matplotlib.pyplot as plt
-import numpy as np
 from tqdm import tqdm
 from scipy.cluster import hierarchy
 import heapq
@@ -32,7 +31,7 @@ colors = [plt.cm.tab10(i/len(jac)) for i,j in enumerate(jac) for _ in range(j.sh
 jac = torch.concat(jac).transpose(0,1) * 2**resolution #(1+np.log(2*np.pi))??
 jac = jac.reshape(*jac.shape[0:2], -1)
 sprint(jac.shape)
-entr = lambda c: torch.linalg.svdvals(c.jac).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
+entr = lambda jac: torch.linalg.svdvals(jac).add(torch.tensor(1j)).log().real.sum(1).mean().mul(2)
 mutinf = lambda c: sum(d.entr for d in c)-2*c.entr
 
 clusterlist = []
@@ -44,13 +43,6 @@ def iplusplus(t):
     #t.__repr__ = lambda: f'{t.index}'
     return t
 class Cluster(set):
-    def reify(self):
-        self.jac = torch.concat([c.jac for c in self],1)
-        self.indices = [i for c in self for i in c.indices]
-        self.entr = self.exactentr = entr(self)
-        self.mutinf = mutinf(self)
-        self.reify = lambda: True
-        return False
     __lt__ = lambda self,other: self.mutinf > other.mutinf #maxheap
     __repr__ = lambda self: f'({self[0].index},{self[1].index})'
     __hash__ = lambda self: self.index # invariant: not called before index exists
@@ -72,23 +64,29 @@ for l in leaves:
     l.indices = [l.index]
 linkage = []
 heap = [cachedpair(a,b) for a,b in tqdm(itertools.combinations(clusters,2))]
-[pair.reify() for pair in tqdm(heap)]
+for h in heap:
+    h.entr = 0
 heapq.heapify(heap)
 
 def heapgenerator(heap):
     while heap:
         p = heapq.heappop(heap)
         if any(c.jac is None for c in p): continue
-        currententr = p.entr
-        if p.reify(): yield p
+        if hasattr(p,'exactentr'):
+            yield p
         else:
-            assert currententr <= p.entr
+            p.indices = [i for c in p for i in c.indices]
+            p.exactentr = entr(torch.concat([c.jac for c in p],1))
+            p.mutinf = mutinf(p)
+            assert p.entr <= p.exactentr
+            p.entr = p.exactentr
             heapq.heappush(heap, p)
 
 for ab in tqdm(heapgenerator(heap)):
     a,b = ab # a and b are fungible
     clusters.remove(a), clusters.remove(b)
     iplusplus(ab)
+    ab.jac = torch.concat([a.jac,b.jac],1)
     a.jac = b.jac = None
     linkage.append([a.index, b.index, ab.entr, ab.jac.shape[1]])
 
