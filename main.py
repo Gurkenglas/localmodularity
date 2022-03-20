@@ -75,8 +75,9 @@ def heapgenerator(heap):
         if hasattr(p,'exactentr'):
             yield p
         else:
+            p.jac = torch.concat([c.jac for c in p],1)
             p.indices = [i for c in p for i in c.indices]
-            p.exactentr = entr(torch.concat([c.jac for c in p],1))
+            p.exactentr = entr(p)
             p.mutinf = mutinf(p)
             assert p.entr <= p.exactentr
             p.entr = p.exactentr
