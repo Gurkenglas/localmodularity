@@ -1,0 +1,7 @@
+LICENSE
+pyproject.toml
+setup.cfg
+local_modularity.egg-info/PKG-INFO
+local_modularity.egg-info/SOURCES.txt
+local_modularity.egg-info/dependency_links.txt
+local_modularity.egg-info/top_level.txt

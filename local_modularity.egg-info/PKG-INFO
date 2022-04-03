@@ -1,0 +1,19 @@
+Metadata-Version: 2.1
+Name: local-modularity
+Version: 0.0.0
+Summary: Black-box neural network analysis
+Home-page: https://github.com/Gurkenglas/localmodularity
+Author: Gurkenglas
+Author-email: gurkenglas@hotmail.de
+License: UNKNOWN
+Project-URL: Bug Tracker, https://github.com/Gurkenglas/localmodularity/issues
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+
+UNKNOWN
+
